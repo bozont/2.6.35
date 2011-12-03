@@ -493,6 +493,8 @@ static void __init msm7x2x_init(void)
 					ARRAY_SIZE(msm7x25_pm_data));
 	msm7x27_wlan_init();
 
+	swift_init_gpio_i2c_devices();
+
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	lge_add_ramconsole_devices();
 	lge_add_ers_devices();

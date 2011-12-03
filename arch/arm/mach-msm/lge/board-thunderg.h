@@ -137,6 +137,7 @@ void config_camera_off_gpios(void);
 void camera_power_mutex_lock(void);
 void camera_power_mutex_unlock(void);
 void thunderg_pwrsink_resume(void);
+void __init swift_init_gpio_i2c_devices(void);
 
 struct device* thunderg_backlight_dev(void);
 #endif

@@ -45,6 +45,12 @@ obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-bl-rt9393_mc.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-ss-driveric-panel.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += mddi_ss_driveric_innotek.o
 
+
+#sensors 
+obj-y += board-swift-gpio-i2c.o
+obj-y += board-swift-msensor-bma150.o
+obj-y += board-swift-ec-ak8973.o
+
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += lge_temp.o # LGE_CHANGE neo.kang@lge.com just for Line PV. It will be removed
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += lge_mtd_direct_access.o # LGE_CHANGE neo.kang@lge.com just for Line PV. It will be removed.
 
