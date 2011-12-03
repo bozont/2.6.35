@@ -1,7 +1,7 @@
 /*
  * Automatically generated C config: don't edit
  * Linux kernel version: 2.6.35.10
- * Sat Dec  3 12:14:42 2011
+ * Sat Dec  3 12:28:58 2011
  */
 #define AUTOCONF_INCLUDED
 #define CONFIG_RING_BUFFER 1
