@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -108,26 +108,26 @@ void __iomem *csibase;
 
 static struct msm_bus_vectors cam_init_vectors[] = {
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_APPSS_SLAVE_EBI_CH0,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VPE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VPE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_JPEG_ENC,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_JPEG_ENC,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
@@ -135,26 +135,26 @@ static struct msm_bus_vectors cam_init_vectors[] = {
 
 static struct msm_bus_vectors cam_preview_vectors[] = {
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_APPSS_SLAVE_EBI_CH0,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VPE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VPE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_JPEG_ENC,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_JPEG_ENC,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
@@ -162,26 +162,26 @@ static struct msm_bus_vectors cam_preview_vectors[] = {
 
 static struct msm_bus_vectors cam_video_vectors[] = {
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_APPSS_SLAVE_EBI_CH0,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VPE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VPE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_JPEG_ENC,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_JPEG_ENC,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
@@ -189,26 +189,26 @@ static struct msm_bus_vectors cam_video_vectors[] = {
 
 static struct msm_bus_vectors cam_snapshot_vectors[] = {
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VFE,
-		.dst = MSM_BUS_APPSS_SLAVE_EBI_CH0,
+		.src = MSM_BUS_MASTER_VFE,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_VPE,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_VPE,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 0,
 		.ib  = 0,
 	},
 	{
-		.src = MSM_BUS_MMSS_MASTER_JPEG_ENC,
-		.dst = MSM_BUS_MMSS_SLAVE_SMI,
+		.src = MSM_BUS_MASTER_JPEG_ENC,
+		.dst = MSM_BUS_SLAVE_SMI,
 		.ab  = 1521190000,
 		.ib  = 1521190000,
 	},
@@ -480,7 +480,7 @@ int msm_camio_clk_enable(enum msm_camio_clk_type clktype)
 	case CAMIO_VPE_CLK:
 		camio_vpe_clk =
 		clk = clk_get(NULL, "vpe_clk");
-		msm_camio_clk_set_min_rate(clk, 150000000);
+		msm_camio_clk_set_min_rate(clk, 200000000);
 		break;
 
 	case CAMIO_VPE_PCLK:
@@ -571,6 +571,13 @@ int msm_camio_clk_disable(enum msm_camio_clk_type clktype)
 	} else
 		rc = -1;
 	return rc;
+}
+
+void msm_camio_vfe_clk_rate_set(int rate)
+{
+	struct clk *clk = camio_vfe_clk;
+	if (rate > clk_get_rate(clk))
+		clk_set_rate(clk, rate);
 }
 
 void msm_camio_clk_rate_set(int rate)
@@ -751,13 +758,6 @@ common_fail:
 void msm_camio_disable(struct platform_device *pdev)
 {
 	uint32_t val;
-	val = (0x0 << MIPI_CALIBRATION_CONTROL_SWCAL_CAL_EN_SHFT) |
-		(0x0 <<
-		MIPI_CALIBRATION_CONTROL_SWCAL_STRENGTH_OVERRIDE_EN_SHFT) |
-		(0x0 << MIPI_CALIBRATION_CONTROL_CAL_SW_HW_MODE_SHFT) |
-		(0x0 << MIPI_CALIBRATION_CONTROL_MANUAL_OVERRIDE_EN_SHFT);
-	CDBG("%s MIPI_CALIBRATION_CONTROL val=0x%x\n", __func__, val);
-	msm_io_w(val, csibase + MIPI_CALIBRATION_CONTROL);
 
 	val = (20 <<
 		MIPI_PHY_D0_CONTROL2_SETTLE_COUNT_SHFT) |
@@ -955,11 +955,11 @@ void msm_camio_set_perf_lvl(enum msm_bus_perf_setting perf_setting)
 			bus_perf_client = 0;
 			return;
 		}
-		pr_info("%s: S_INIT rc = %u\n", __func__, bus_perf_client);
+		CDBG("%s: S_INIT rc = %u\n", __func__, bus_perf_client);
 		break;
 	case S_EXIT:
 		if (bus_perf_client) {
-			pr_info("%s: S_EXIT\n", __func__);
+			CDBG("%s: S_EXIT\n", __func__);
 			msm_bus_scale_unregister_client(bus_perf_client);
 		} else
 			pr_err("%s: Bus Client NOT Registered!!!\n", __func__);
@@ -968,7 +968,7 @@ void msm_camio_set_perf_lvl(enum msm_bus_perf_setting perf_setting)
 		if (bus_perf_client) {
 			rc = msm_bus_scale_client_update_request(
 				bus_perf_client, 1);
-			pr_info("%s: S_PREVIEW rc = %d\n", __func__, rc);
+			CDBG("%s: S_PREVIEW rc = %d\n", __func__, rc);
 		} else
 			pr_err("%s: Bus Client NOT Registered!!!\n", __func__);
 		break;
@@ -976,7 +976,7 @@ void msm_camio_set_perf_lvl(enum msm_bus_perf_setting perf_setting)
 		if (bus_perf_client) {
 			rc = msm_bus_scale_client_update_request(
 				bus_perf_client, 2);
-			pr_info("%s: S_VIDEO rc = %d\n", __func__, rc);
+			CDBG("%s: S_VIDEO rc = %d\n", __func__, rc);
 		} else
 			pr_err("%s: Bus Client NOT Registered!!!\n", __func__);
 		break;
@@ -984,13 +984,13 @@ void msm_camio_set_perf_lvl(enum msm_bus_perf_setting perf_setting)
 		if (bus_perf_client) {
 			rc = msm_bus_scale_client_update_request(
 				bus_perf_client, 3);
-			pr_info("%s: S_CAPTURE rc = %d\n", __func__, rc);
+			CDBG("%s: S_CAPTURE rc = %d\n", __func__, rc);
 		} else
 			pr_err("%s: Bus Client NOT Registered!!!\n", __func__);
 		break;
 	case S_DEFAULT:
 		break;
 	default:
-		pr_info("%s: INVALID CASE\n", __func__);
+		pr_warning("%s: INVALID CASE\n", __func__);
 	}
 }

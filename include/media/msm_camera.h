@@ -96,7 +96,7 @@
 	_IOW(MSM_CAM_IOCTL_MAGIC, 16, struct msm_camera_vfe_cfg_cmd *)
 
 #define MSM_CAM_IOCTL_GET_PICTURE \
-	_IOW(MSM_CAM_IOCTL_MAGIC, 17, struct msm_camera_ctrl_cmd *)
+	_IOW(MSM_CAM_IOCTL_MAGIC, 17, struct msm_frame *)
 
 #define MSM_CAM_IOCTL_SET_CROP \
 	_IOW(MSM_CAM_IOCTL_MAGIC, 18, struct crop_info *)
@@ -155,6 +155,12 @@
 #define MSM_CAM_IOCTL_GET_CAMERA_INFO \
 	_IOR(MSM_CAM_IOCTL_MAGIC, 36, struct msm_camera_info *)
 
+#define MSM_CAM_IOCTL_UNBLOCK_POLL_PIC_FRAME \
+	_IO(MSM_CAM_IOCTL_MAGIC, 37)
+
+#define MSM_CAM_IOCTL_RELEASE_PIC_BUFFER \
+	_IOW(MSM_CAM_IOCTL_MAGIC, 38, struct camera_enable_cmd *)
+
 #define MSM_CAMERA_LED_OFF  0
 #define MSM_CAMERA_LED_LOW  1
 #define MSM_CAMERA_LED_HIGH 2
@@ -197,20 +203,22 @@ struct msm_ctrl_cmd {
 struct msm_vfe_evt_msg {
 	unsigned short type;	/* 1 == event (RPC), 0 == message (adsp) */
 	unsigned short msg_id;
+	int af_mode_locked;
 	unsigned int len;	/* size in, number of bytes out */
-	uint32_t frame_id;
+
 	void *data;
 };
 
 struct msm_isp_evt_msg {
-	unsigned short type;	/* 1 == event (RPC), 0 == message (adsp) */
-	unsigned short msg_id;
-	unsigned int len;	/* size in, number of bytes out */
-	/* maximum possible data size that can be
-i	  sent to user space as v4l2 data structure
-	  is only of 64 bytes */
-	uint8_t data[48];
+ unsigned short type;        /* 1 == event (RPC), 0 == message (adsp) */
+ unsigned short msg_id;
+ unsigned int len;   /* size in, number of bytes out */
+ /* maximum possible data size that can be
+   sent to user space as v4l2 data structure
+   is only of 64 bytes */
+ uint8_t data[48];
 };
+
 struct msm_vpe_evt_msg {
 	unsigned short type; /* 1 == event (RPC), 0 == message (adsp) */
 	unsigned short msg_id;
@@ -305,6 +313,8 @@ struct msm_camera_cfg_cmd {
 #define CMD_VPE 41
 #define CMD_AXI_CFG_VPE 42
 
+#define CMD_AXI_CFG_ZSL 43
+
 /* vfe config command: config command(from config thread)*/
 struct msm_vfe_cfg_cmd {
 	int cmd_type;
@@ -385,7 +395,8 @@ struct outputCfg {
 #define CAMIF_TO_AXI_VIA_OUTPUT_2 4
 #define OUTPUT_1_AND_CAMIF_TO_AXI_VIA_OUTPUT_2 5
 #define OUTPUT_2_AND_CAMIF_TO_AXI_VIA_OUTPUT_1 6
-#define LAST_AXI_OUTPUT_MODE_ENUM = OUTPUT_2_AND_CAMIF_TO_AXI_VIA_OUTPUT_1 7
+#define OUTPUT_1_2_AND_3 7
+#define LAST_AXI_OUTPUT_MODE_ENUM = OUTPUT_1_2_AND_3 7
 
 #define MSM_FRAME_PREV_1	0
 #define MSM_FRAME_PREV_2	1
@@ -403,7 +414,7 @@ struct fd_roi_info {
 };
 
 struct msm_frame {
-	struct timespec ts;
+
 	int path;
 	unsigned long buffer;
 	uint32_t y_off;
@@ -412,8 +423,6 @@ struct msm_frame {
 
 	void *cropinfo;
 	int croplen;
-	uint32_t error_code;
-	struct fd_roi_info roi_info;
 };
 
 #define MSM_CAMERA_ERR_MASK (0xFFFFFFFF & 1)
@@ -484,22 +493,6 @@ struct msm_snapshot_pp_status {
 #define CFG_SEND_WB_INFO    28
 #define CFG_MAX 			29
 
-/* LGE_CHANGE_S [junyeong.han@lge.com] Add CFG values for auto focus */
-/* 2010-05-02: Add auto-focus values */
-/* 2010-05-05: Add setting iso values */
-/* 2010-05-14: Add setting scene values */
-#if defined (CONFIG_ISX005)
-#define CFG_START_AF_FOCUS	101
-#define CFG_CHECK_AF_DONE	102
-#define CFG_CHECK_AF_CANCEL	103
-#define CFG_AF_LOCKED		104
-#define CFG_AF_UNLOCKED		105
-
-#define CFG_SET_ISO			201
-#define CFG_SET_SCENE		202
-#endif
-/* LGE_CHANGE_E [junyeong.han@lge.com] */
-
 #define MOVE_NEAR	0
 #define MOVE_FAR	1
 
@@ -522,18 +515,7 @@ struct msm_snapshot_pp_status {
 #define CAMERA_EFFECT_WHITEBOARD	6
 #define CAMERA_EFFECT_BLACKBOARD	7
 #define CAMERA_EFFECT_AQUA		8
-
-/* LGE_CHANGE_S [junyeong.han@lge.com] Add CAMERA_EFFECT values */
-/* 2010-05-13: Add CAMERA_EFFECT values */
-#if defined (CONFIG_ISX005)
-#define CAMERA_EFFECT_NEGATIVE_SEPIA	9
-#define CAMERA_EFFECT_BLUE				10
-#define CAMERA_EFFECT_PASTEL			11
-#define CAMERA_EFFECT_MAX				12
-#else	/* 5330 origin */
 #define CAMERA_EFFECT_MAX		9
-#endif
-/* LGE_CHANGE_E [junyeong.han@lge.com] */
 
 struct sensor_pict_fps {
 	uint16_t prevfps;
@@ -548,6 +530,7 @@ struct exp_gain_cfg {
 struct focus_cfg {
 	int32_t steps;
 	int dir;
+  int mode;
 };
 
 struct fps_cfg {
@@ -563,7 +546,9 @@ struct wb_info_cfg {
 struct sensor_cfg_data {
 	int cfgtype;
 	int mode;
-	int rs;
+	int rs;	
+        int width;
+	int height;
 	uint8_t max_steps;
 
 	union {
@@ -580,6 +565,12 @@ struct sensor_cfg_data {
 		struct focus_cfg focus;
 		struct fps_cfg fps;
 		struct wb_info_cfg wb_info;
+	       int8_t wb;
+               int8_t iso;
+               int8_t scene_mode;
+               int8_t ev;
+
+    int8_t zoom; 
 	} cfg;
 };
 
@@ -613,26 +604,6 @@ struct flash_ctrl_data {
 		struct strobe_flash_ctrl_data strobe_ctrl;
 	} ctrl_data;
 };
-// LGE ejoon.kim@lge.com mode add
-#define CAMERA_YUV_WB_AUTO						1
-#define CAMERA_YUV_WB_INCANDESCENT			2
-#define CAMERA_YUV_WB_DAYLIGHT				3
-#define CAMERA_YUV_WB_FLUORESCENT			4
-#define CAMERA_YUV_WB_CLOUDY_DAYLIGHT		5
-
-#define CAMERA_YUV_ISO_AUTO		1
-#define CAMERA_YUV_ISO_800			2
-#define CAMERA_YUV_ISO_400			3
-#define CAMERA_YUV_ISO_200			4
-#define CAMERA_YUV_ISO_100			5
-
-#define CAMERA_SCENEMODE_AUTO 				1
-#define CAMERA_SCENEMODES_PORTRAIT 			2
-#define CAMERA_SCENEMODES_LANDSCAPE 		3
-#define CAMERA_SCENEMODES_SPORTS 			4
-#define CAMERA_SCENEMODES_NIGHT 				5
-#define CAMERA_SCENEMODES_SUNSET 			6
-// LGE End
 
 #define GET_NAME			0
 #define GET_PREVIEW_LINE_PER_FRAME	1

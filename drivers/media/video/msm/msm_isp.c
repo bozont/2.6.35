@@ -151,7 +151,9 @@ static int msm_isp_control(struct msm_cam_v4l2_device *pcam,
 				struct msm_ctrl_cmd *out)
 {
 	int rc = 0;
+	void *value;
 	struct msm_queue_cmd *rcmd;
+	struct msm_ctrl_cmd *ctrlcmd;
 	struct msm_device_queue *queue =  &pcam->ctrl_q;
 
 	struct v4l2_event v4l2_evt;
@@ -190,8 +192,26 @@ static int msm_isp_control(struct msm_cam_v4l2_device *pcam,
 	BUG_ON(!rcmd);
 	D("%s Finished servicing ioctl\n", __func__);
 
+	ctrlcmd = (struct msm_ctrl_cmd *)(rcmd->command);
+	value = out->value;
+	if (ctrlcmd->length > 0)
+		memcpy(value, ctrlcmd->value, ctrlcmd->length);
+
+	memcpy(out, ctrlcmd, sizeof(struct msm_ctrl_cmd));
+	out->value = value;
+
 	free_qcmd(rcmd);
 	D("%s: rc %d\n", __func__, rc);
+	/* rc is the time elapsed. */
+	if (rc >= 0) {
+		/* TODO: Refactor msm_ctrl_cmd::status field */
+		if (out->status == 0)
+			rc = -1;
+		else if (out->status == 1)
+			rc = 0;
+		else
+			rc = -EINVAL;
+	}
 	return rc;
 }
 
@@ -518,7 +538,7 @@ static int msm_isp_enqueue(struct msm_cam_v4l2_device *pcam,
 								__func__);
 				isp_event->isp_data.isp_msg.len = 0;
 			} else {
-				memcpy(&isp_event->isp_data.isp_msg.data[0],
+				memcpy((void *)isp_event->isp_data.isp_msg.data,
 						&stats,
 						sizeof(struct msm_stats_buf));
 				isp_event->isp_data.isp_msg.len =
@@ -528,7 +548,7 @@ static int msm_isp_enqueue(struct msm_cam_v4l2_device *pcam,
 		} else if ((data->evt_msg.len > 0) &&
 			(data->evt_msg.len <= 48) && /* only 48 bytes */
 			(data->type == VFE_MSG_GENERAL)) {
-			memcpy(&isp_event->isp_data.isp_msg.data[0],
+			memcpy((void *)isp_event->isp_data.isp_msg.data,
 						data->evt_msg.data,
 						data->evt_msg.len);
 		} else if (data->type == VFE_MSG_OUTPUT_P) {
@@ -1704,9 +1724,9 @@ int msm_isp_set_fmt(struct msm_cam_v4l2_device *pcam, struct v4l2_format *pfmt)
 	if (pfmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		D("%s, Attention! Wrong buf-type %d\n", __func__, pfmt->type);
 
-	ctrlcmd.type = MSM_V4L2_VID_CAP_TYPE;
-	ctrlcmd.length = 0;
-	ctrlcmd.value = NULL;
+	ctrlcmd.type       = MSM_V4L2_VID_CAP_TYPE;
+	ctrlcmd.length     = MSM_V4L2_DIMENSION_SIZE;
+	ctrlcmd.value      = (void *)pfmt->fmt.pix.priv;
 	ctrlcmd.timeout_ms = 10000;
 
 	/* send command to config thread in usersspace, and get return value */
@@ -1788,7 +1808,7 @@ int msm_isp_streamon(struct msm_cam_v4l2_device *pcam)
 	ctrlcmd.type	   = MSM_V4L2_STREAM_ON;
 	ctrlcmd.timeout_ms = 10000;
 	ctrlcmd.length	 = 0;
-	ctrlcmd.value	  = NULL;
+	ctrlcmd.value    = NULL;
 
 	/* send command to config thread in usersspace, and get return value */
 	rc = msm_isp_control(pcam, &ctrlcmd);
@@ -1805,12 +1825,82 @@ int msm_isp_streamoff(struct msm_cam_v4l2_device *pcam)
 	ctrlcmd.type	   = MSM_V4L2_STREAM_OFF;
 	ctrlcmd.timeout_ms = 10000;
 	ctrlcmd.length	 = 0;
-	ctrlcmd.value	  = NULL;
+	ctrlcmd.value    = NULL;
 
 	/* send command to config thread in usersspace, and get return value */
 	rc = msm_isp_control(pcam, &ctrlcmd);
 
 	return rc;
+}
+
+int msm_isp_s_ctrl(struct msm_cam_v4l2_device *pcam, struct v4l2_control *ctrl)
+{
+	int rc = 0;
+	struct msm_ctrl_cmd ctrlcmd;
+	uint8_t ctrl_data[max_control_command_size];
+
+	WARN_ON(ctrl == NULL);
+	memset(ctrl_data, 0, sizeof(ctrl_data));
+
+	ctrlcmd.type = MSM_V4L2_SET_CTRL;
+	ctrlcmd.length = sizeof(struct v4l2_control);
+	ctrlcmd.value = (void *)ctrl_data;
+	memcpy(ctrlcmd.value, ctrl, ctrlcmd.length);
+	ctrlcmd.timeout_ms = 1000;
+
+	/* send command to config thread in usersspace, and get return value */
+	rc = msm_isp_control(pcam, &ctrlcmd);
+
+	return rc;
+}
+
+int msm_isp_g_ctrl(struct msm_cam_v4l2_device *pcam, struct v4l2_control *ctrl)
+{
+	int rc = 0;
+	struct msm_ctrl_cmd ctrlcmd;
+	uint8_t ctrl_data[max_control_command_size];
+
+	WARN_ON(ctrl == NULL);
+	memset(ctrl_data, 0, sizeof(ctrl_data));
+
+	ctrlcmd.type = MSM_V4L2_GET_CTRL;
+	ctrlcmd.length = sizeof(struct v4l2_control);
+	ctrlcmd.value = (void *)ctrl_data;
+	memcpy(ctrlcmd.value, ctrl, ctrlcmd.length);
+	ctrlcmd.timeout_ms = 1000;
+
+	/* send command to config thread in usersspace, and get return value */
+	rc = msm_isp_control(pcam, &ctrlcmd);
+
+	ctrl->value = ((struct v4l2_control *)ctrlcmd.value)->value;
+
+	return rc;
+}
+
+int msm_isp_q_ctrl(struct msm_cam_v4l2_device *pcam,
+			struct v4l2_queryctrl *queryctrl)
+{
+	int rc = 0;
+	struct msm_ctrl_cmd ctrlcmd;
+	uint8_t ctrl_data[max_control_command_size];
+
+	WARN_ON(queryctrl == NULL);
+	memset(ctrl_data, 0, sizeof(ctrl_data));
+
+	ctrlcmd.type = MSM_V4L2_QUERY_CTRL;
+	ctrlcmd.length = sizeof(struct v4l2_queryctrl);
+	ctrlcmd.value = (void *)ctrl_data;
+	memcpy(ctrlcmd.value, queryctrl, ctrlcmd.length);
+	ctrlcmd.timeout_ms = 1000;
+
+	/* send command to config thread in userspace, and get return value */
+	rc = msm_isp_control(pcam, &ctrlcmd);
+	D("%s: rc = %d\n", __func__, rc);
+
+	if (rc >= 0)
+		memcpy(queryctrl, ctrlcmd.value, sizeof(struct v4l2_queryctrl));
+
+       return rc;
 }
 
 /* Init a msm device for ISP control,

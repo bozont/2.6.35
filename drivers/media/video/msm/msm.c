@@ -73,13 +73,31 @@ static void msm_enqueue(struct msm_device_queue *queue,
 static int msm_ctrl_cmd_done(struct msm_cam_v4l2_device *ctrl_pmsm,
 						void __user *arg)
 {
-	struct msm_ctrl_cmd command;
+	void __user *uptr;
 	struct msm_queue_cmd *qcmd;
-	if (copy_from_user(&command, arg, sizeof(command)))
+	struct msm_ctrl_cmd *command = &ctrl_pmsm->ctrl;
+
+	if (copy_from_user(command, arg,
+			sizeof(struct msm_ctrl_cmd)))
 		return -EINVAL;
 
 	qcmd = kzalloc(sizeof(struct msm_queue_cmd), GFP_KERNEL);
 	atomic_set(&qcmd->on_heap, 0);
+	uptr = command->value;
+	qcmd->command = command;
+
+	if (command->length > 0) {
+		command->value = ctrl_pmsm->ctrl_data;
+		if (command->length > sizeof(ctrl_pmsm->ctrl_data)) {
+			pr_err("%s: user data %d is too big (max %d)\n",
+				__func__, command->length,
+				sizeof(ctrl_pmsm->ctrl_data));
+			return -EINVAL;
+		}
+		if (copy_from_user(command->value, uptr, command->length))
+			return -EINVAL;
+	}
+
 	msm_enqueue(&ctrl_pmsm->ctrl_q, &qcmd->list_control);
 	return 0;
 }
@@ -108,10 +126,12 @@ static int msm_camera_v4l2_queryctrl(struct file *f, void *pctx,
 				struct v4l2_queryctrl *pqctrl)
 {
 	int rc = 0;
+	struct msm_cam_v4l2_device *pcam  = video_drvdata(f);
 
 	D("%s\n", __func__);
 	WARN_ON(pctx != f->private_data);
 
+	rc = msm_isp_q_ctrl(pcam, pqctrl);
 	return rc;
 }
 
@@ -119,20 +139,26 @@ static int msm_camera_v4l2_g_ctrl(struct file *f, void *pctx,
 					struct v4l2_control *c)
 {
 	int rc = 0;
+	struct msm_cam_v4l2_device *pcam  = video_drvdata(f);
 
 	D("%s\n", __func__);
 	WARN_ON(pctx != f->private_data);
+
+	rc = msm_isp_g_ctrl(pcam, c);
 
 	return rc;
 }
 
 static int msm_camera_v4l2_s_ctrl(struct file *f, void *pctx,
-					struct v4l2_control *c)
+					struct v4l2_control *ctrl)
 {
 	int rc = 0;
+	struct msm_cam_v4l2_device *pcam  = video_drvdata(f);
 
 	D("%s\n", __func__);
 	WARN_ON(pctx != f->private_data);
+
+	rc = msm_isp_s_ctrl(pcam, ctrl);
 
 	return rc;
 }
@@ -339,12 +365,28 @@ static int msm_camera_v4l2_s_fmt_cap(struct file *f, void *pctx,
 					struct v4l2_format *pfmt)
 {
 	int rc;
+	void __user *uptr;
 	/* get the video device */
 	struct msm_cam_v4l2_device *pcam  = video_drvdata(f);
 
 	D("%s\n", __func__);
 	D("%s priv = 0x%p\n", __func__, (void *)pfmt->fmt.pix.priv);
 	WARN_ON(pctx != f->private_data);
+
+	uptr = (void __user *)pfmt->fmt.pix.priv;
+	pfmt->fmt.pix.priv = (__u32)kzalloc(MSM_V4L2_DIMENSION_SIZE,
+							GFP_KERNEL);
+
+	if (!pfmt->fmt.pix.priv) {
+		D("%s could not allocate memory\n", __func__);
+		return -ENOMEM;
+	}
+	D("%s Copying priv data:n", __func__);
+	if (copy_from_user((void *)pfmt->fmt.pix.priv, uptr,
+					MSM_V4L2_DIMENSION_SIZE))
+		return -EINVAL;
+
+	D("%s Done Copying priv data\n", __func__);
 
 	mutex_lock(&pcam->vid_bufq.vb_lock);
 
@@ -696,30 +738,49 @@ static long msm_ioctl_config(struct file *fp, unsigned int cmd,
 	int rc = -EINVAL;
 	struct v4l2_event ev;
 	struct msm_cam_v4l2_device *pcam = fp->private_data;
-	struct msm_isp_stats_event_ctrl *isp_event;
 
 	D("%s: cmd %d\n", __func__, _IOC_NR(cmd));
 
 	switch (cmd) {
 
-	case VIDIOC_DQEVENT:
+	case VIDIOC_DQEVENT: {
+		void __user *u_ctrl_value = NULL;
+		struct msm_isp_stats_event_ctrl *u_isp_event;
+		struct msm_isp_stats_event_ctrl *k_isp_event;
+
+		/* Make a copy of control value and event data pointer */
 		D("%s: VIDIOC_DQEVENT\n", __func__);
 		if (copy_from_user(&ev, (void __user *)arg,
 				sizeof(struct v4l2_event)))
 			break;
+		u_isp_event = (struct msm_isp_stats_event_ctrl *)ev.u.data;
+		u_ctrl_value = u_isp_event->isp_data.ctrl.value;
 
 		rc = v4l2_event_dequeue(&pcam->eventHandle, &ev,
 			fp->f_flags & O_NONBLOCK);
 		if (rc < 0) {
 			printk(KERN_ERR "no pending events?");
 			break;
-		} else if (copy_to_user((void __user *)arg, &ev,
-					sizeof(struct v4l2_event))) {
+		}
+
+		k_isp_event = (struct msm_isp_stats_event_ctrl *)ev.u.data;
+		if (ev.type == V4L2_EVENT_PRIVATE_START+MSM_CAM_RESP_V4L2 &&
+			u_isp_event->isp_data.ctrl.length > 0) {
+			void *k_ctrl_value = k_isp_event->isp_data.ctrl.value;
+			if (copy_to_user(u_ctrl_value, k_ctrl_value,
+				u_isp_event->isp_data.ctrl.length)) {
+				rc = -EINVAL;
+				break;
+			}
+			k_isp_event->isp_data.ctrl.value = u_ctrl_value;
+		}
+
+		if (copy_to_user((void __user *)arg, &ev,
+				sizeof(struct v4l2_event))) {
 			rc = -EINVAL;
 			break;
-			}
-
-		isp_event = (struct msm_isp_stats_event_ctrl *)ev.u.data;
+		}
+		}
 
 		break;
 
@@ -730,7 +791,7 @@ static long msm_ioctl_config(struct file *fp, unsigned int cmd,
 
 	default:
 		/* For the rest of config command, call HW config function*/
-	  rc =  pcam->isp.isp_config(pcam, cmd, arg);
+		rc =  pcam->isp.isp_config(pcam, cmd, arg);
 		break;
 	}
 	return rc;
