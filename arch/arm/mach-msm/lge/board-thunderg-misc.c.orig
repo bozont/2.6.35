@@ -365,7 +365,6 @@ static struct platform_device *thunderg_misc_devices[] __initdata = {
 void __init lge_add_misc_devices(void)
 {
 	platform_add_devices(thunderg_misc_devices, ARRAY_SIZE(thunderg_misc_devices));
-	if(lge_bd_rev >= LGE_REV_E)
-		platform_device_register(&msm_device_pmic_leds);
+	platform_device_register(&msm_device_pmic_leds);
 }
 

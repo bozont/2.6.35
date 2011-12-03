@@ -54,8 +54,8 @@ static struct platform_device msm_batt_device = {
 };
 
 /* THUNDERG Board Vibrator Functions for Android Vibrator Driver */
-#define VIBE_IC_VOLTAGE			3300
-#define GPIO_LIN_MOTOR_PWM		28
+//#define VIBE_IC_VOLTAGE			3300
+//#define GPIO_LIN_MOTOR_PWM		28
 
 #define GP_MN_CLK_MDIV_REG		0x004C
 #define GP_MN_CLK_NDIV_REG		0x0050
@@ -176,7 +176,7 @@ static struct platform_device msm_device_pmic_leds = {
 	.dev.platform_data = "button-backlight",
 };
 
-int thunderg_vibrator_power_set(int enable)
+/*int thunderg_vibrator_power_set(int enable)
 {
 	static int is_enabled = 0;
 	struct device *dev = thunderg_backlight_dev();
@@ -192,7 +192,7 @@ int thunderg_vibrator_power_set(int enable)
 			return 0;
 		}
 		
-		/* 3300 mV for Motor IC */				
+		//* 3300 mV for Motor IC
 		if (aat28xx_ldo_set_level(dev, 1, VIBE_IC_VOLTAGE) < 0) {
 			printk(KERN_ERR "%s: vibrator LDO set failed\n", __FUNCTION__);
 			return -EIO;
@@ -243,7 +243,7 @@ int thunderg_vibrator_pwm_set(int enable, int amp)
 
 int thunderg_vibrator_ic_enable_set(int enable)
 {
-	/* nothing to do, thunder does not using Motor Enable pin */
+	// nothing to do, thunder does not using Motor Enable pin
 	return 0;
 }
 
@@ -274,7 +274,7 @@ static struct platform_device android_vibrator_device = {
 	.dev = {
 		.platform_data = &thunderg_vibrator_data,
 	},
-};
+};*/
 
 /* ear sense driver */
 static char *ear_state_string[] = {
@@ -356,7 +356,7 @@ static struct platform_device thunderg_earsense_device = {
 /* misc platform devices */
 static struct platform_device *thunderg_misc_devices[] __initdata = {
 	&msm_batt_device,
-	&android_vibrator_device,
+	//&android_vibrator_device,
 	&thunderg_carkit_device,
 	&thunderg_earsense_device,
 };

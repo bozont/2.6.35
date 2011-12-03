@@ -71,10 +71,6 @@
 #include <mach/board_lge.h>
 #include "board-thunderg.h"
 
-//todo add headers 
-void map_zero_page_strongly_ordered(void);
-void __init swift_init_timed_vibrator(void);
-
 /* board-specific pm tuning data definitions */
 
 /* currently, below declaration code is blocked.
@@ -514,9 +510,6 @@ static void __init msm7x2x_init(void)
 
 	/* gpio i2c devices should be registered at latest point */
 	lge_add_gpio_i2c_devices();
-	
-	/* initialize timed_output vibrator */
-	swift_init_timed_vibrator();
 }
 
 static void __init msm7x2x_map_io(void)
