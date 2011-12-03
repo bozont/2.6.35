@@ -113,7 +113,7 @@ enum {
 	BT_PCM_SYNC     = 70,
 	BT_PCM_CLK      = 71,
 	BT_HOST_WAKE    = 83,
-	BT_RESET_N			= 123,
+	BT_RESET_N      = 96,
 };
 
 /* for desk dock
