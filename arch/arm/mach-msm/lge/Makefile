@@ -31,7 +31,7 @@ obj-$(CONFIG_MACH_MSM7X27_THUNDERC) += board-thunderc-pm.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-mmc.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-snd.o
-obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-panel.o
+obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-panel.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-bt.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-camera.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-input.o
@@ -40,6 +40,10 @@ obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-thunderg-pm.o
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += lge_errorhandler.o #LGE_CHANGE [blue.park@lge.com] 2009-04-04 <For Error Handler>
 
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-msm-touch.o
+obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-leds.o
+obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-bl-rt9393_mc.o
+obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += board-swift-ss-driveric-panel.o
+obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += mddi_ss_driveric_innotek.o
 
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += lge_temp.o # LGE_CHANGE neo.kang@lge.com just for Line PV. It will be removed
 obj-$(CONFIG_MACH_MSM7X27_THUNDERG) += lge_mtd_direct_access.o # LGE_CHANGE neo.kang@lge.com just for Line PV. It will be removed.

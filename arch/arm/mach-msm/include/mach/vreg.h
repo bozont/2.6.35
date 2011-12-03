@@ -25,5 +25,8 @@ void vreg_put(struct vreg *vreg);
 int vreg_enable(struct vreg *vreg);
 int vreg_disable(struct vreg *vreg);
 int vreg_set_level(struct vreg *vreg, unsigned mv);
+int vreg_get_refcnt(struct vreg *vreg);
+int vreg_must_enable(struct vreg *vreg);
+int vreg_must_disable(struct vreg *vreg);
 
 #endif

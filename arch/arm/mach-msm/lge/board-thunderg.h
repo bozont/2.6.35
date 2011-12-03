@@ -92,12 +92,12 @@
 #define ECOM_I2C_ADDRESS		0x0F /* slave address 7bit */
 
 /* lcd & backlight */
-#define GPIO_LCD_BL_EN		82
+#define GPIO_LCD_BL_EN		84
 #define GPIO_BL_I2C_SCL		88
 #define GPIO_BL_I2C_SDA		89
 #define GPIO_LCD_VSYNC_O	97
-#define GPIO_LCD_MAKER_LOW	101
-#define GPIO_LCD_RESET_N	102
+#define GPIO_LCD_MAKER_LOW	102
+#define GPIO_LCD_RESET_N	101
 
 #define BL_POWER_SUSPEND 0
 #define BL_POWER_RESUME  1

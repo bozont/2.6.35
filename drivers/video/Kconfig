@@ -2568,6 +2568,13 @@ config FB_MSM_MDDI_NOVATEK_HVGA
 	---help---
 	  Support for MDDI NOVATEK HVGA(320x480) Panel.
 
+config FB_MSM_MDDI_SWIFT_PANEL
+	bool "MDDI Swift SS DirverIC panel"
+	select FB_MSM_MDDI
+	---help---
+	  Support for MDDI Swift HVGA(SS driverIC) panel
+	  320x480, innotek and sharp...
+
 config FB_MSM_PANEL_NONE
 	bool "NONE"
 	---help---
