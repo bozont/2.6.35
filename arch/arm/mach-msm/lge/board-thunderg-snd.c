@@ -33,20 +33,33 @@ static struct snd_endpoint snd_endpoints_list[] = {
 	SND(IN_S_SADC_OUT_SPEAKER_PHONE, 25),
 	SND(CURRENT, 27),
 #else
-/* Mike's CHANGE - FIX kernel audio routing */
-        SND(HANDSET, 0),
+/* LGE_CHANGE_S, [junyoub.an] , 2010-02-12, Define sound device*/
+	SND(HANDSET, 0),
 	SND(HEADSET_STEREO_AUDIO, 2),//31
-	SND(HEADSET_STEREO, 3),
+	SND(TTY_HEADSET, 2),				// alohag
+	SND(HEADSET_STEREO, 2),
+	SND(HEADSET, 3),					// alohag
+	SND(HEADSET_LOOPBACK, 3),		// alohag
 	SND(SPEAKER_PHONE, 6),
+	SND(SPEAKER_IN_CALL, 6),			// alohag
 	SND(SPEAKER_AUDIO, 5),
-	SND(HEADSET_SPEAKER, 7),
+	SND(SPEAKER, 5),					// alohag
+	SND(SPEAKER_RING, 5),			// alohag
+
+	SND(TTY_VCO, 5),					// alohag
+	SND(TTY_HCO, 5),					// alohag
+
+//	SND(HEADSET_SPEAKER, 7),
+	SND(HEADSET_AND_SPEAKER, 7),
 	SND(VOICE_RECORDER, 8),
 	SND(FM_RADIO_HEADSET_MEDIA, 9),
+	SND(FM_HEADSET, 9),				// alohag
 	SND(FM_RADIO_SPEAKER_MEDIA, 10),
+	SND(FM_SPEAKER, 10),				// alohag
 	SND(BT, 12),
 	SND(BT_A2DP, 11),//20
 	SND(CURRENT, 35),	
-/* Mike's CHANGE - FIX kernel audio routing */
+/* LGE_CHANGE_E, [junyoub.an] , 2010-02-12, Define sound device*/
 
 #endif
 };

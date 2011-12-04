@@ -46,6 +46,15 @@
 #define max_control_command_size 150
 #define CROP_LEN 36
 
+enum vfe_mode_of_operation{
+	VFE_MODE_OF_OPERATION_CONTINUOUS,
+	VFE_MODE_OF_OPERATION_SNAPSHOT,
+	VFE_MODE_OF_OPERATION_VIDEO,
+	VFE_MODE_OF_OPERATION_RAW_SNAPSHOT,
+	VFE_MODE_OF_OPERATION_ZSL,
+	VFE_LAST_MODE_OF_OPERATION_ENUM
+};
+
 enum msm_queue {
 	MSM_CAM_Q_CTRL,     /* control command or control command status */
 	MSM_CAM_Q_VFE_EVT,  /* adsp event */
@@ -102,6 +111,8 @@ struct msm_vpe_phy_info {
 #define VFE31_OUTPUT_MODE_PT (0x1 << 0)
 #define VFE31_OUTPUT_MODE_S (0x1 << 1)
 #define VFE31_OUTPUT_MODE_V (0x1 << 2)
+#define VFE31_OUTPUT_MODE_P (0x1 << 3)
+#define VFE31_OUTPUT_MODE_T (0x1 << 4)
 
 struct msm_vfe_phy_info {
 	uint32_t sbuf_phy;
@@ -241,6 +252,7 @@ struct msm_sync {
 	 */
 	struct msm_device_queue frame_q;
 	int unblock_poll_frame;
+	int unblock_poll_pic_frame;
 
 	/* This queue contains snapshot frames.  It is accessed by the DSP (in
 	 * interrupt context, and by the control thread.
@@ -282,6 +294,8 @@ struct msm_sync {
 	spinlock_t pmem_frame_spinlock;
 	spinlock_t pmem_stats_spinlock;
 	spinlock_t abort_pict_lock;
+	int snap_count;
+	int thumb_count;
 };
 
 #define MSM_APPS_ID_V4L2 "msm_v4l2"
@@ -358,22 +372,7 @@ static inline int msm_flash_ctrl(
 }
 #endif
 
-/* Below functions are added for V4L2 kernel APIs */
-struct msm_v4l2_driver {
-	struct msm_sync *sync;
-	int (*open)(struct msm_sync *, const char *apps_id, int);
-	int (*release)(struct msm_sync *);
-	int (*ctrl)(struct msm_sync *, struct msm_ctrl_cmd *);
-	int (*reg_pmem)(struct msm_sync *, struct msm_pmem_info *);
-	int (*get_frame) (struct msm_sync *, struct msm_frame *);
-	int (*put_frame) (struct msm_sync *, struct msm_frame *);
-	int (*get_pict) (struct msm_sync *, struct msm_ctrl_cmd *);
-	unsigned int (*drv_poll) (struct msm_sync *, struct file *,
-				struct poll_table_struct *);
-};
 
-int msm_v4l2_register(struct msm_v4l2_driver *);
-int msm_v4l2_unregister(struct msm_v4l2_driver *);
 
 void msm_camvfe_init(void);
 int msm_camvfe_check(void *);

@@ -31,13 +31,15 @@
 #include <mach/board_lge.h>
 #include "board-thunderg.h"
 
-static u32 thunderg_battery_capacity(u32 current_soc)
+/*static u32 thunderg_battery_capacity(u32 current_soc)
 {
 	if(current_soc > 100)
 		current_soc = 100;
 
 	return current_soc;
-}
+}*/
+
+static u32 thunderg_battery_capacity(u32 current_voltage);
 
 static struct msm_psy_batt_pdata msm_psy_batt_data = {
 	.voltage_min_design     = 3200,
@@ -46,6 +48,25 @@ static struct msm_psy_batt_pdata msm_psy_batt_data = {
 	.batt_technology        = POWER_SUPPLY_TECHNOLOGY_LION,
 	.calculate_capacity		= thunderg_battery_capacity,
 };
+
+
+static u32 thunderg_battery_capacity(u32 current_voltage)
+{
+  u32 low_voltage   = msm_psy_batt_data.voltage_min_design;
+  u32 high_voltage  = msm_psy_batt_data.voltage_max_design;
+  u32 cap = 0 ;
+  printk(KERN_INFO "Current Battary Voltage  = %d\n ",current_voltage);
+  if (current_voltage >= 4190) 
+    return 100;
+  else if (current_voltage <= 3200)
+    return 0;
+  else 
+    { 
+      cap =  (current_voltage - low_voltage) * 100 / (high_voltage - low_voltage);
+      cap = cap +  (5 - cap % 5 ); 
+      return  cap;
+    }
+}
 
 static struct platform_device msm_batt_device = {
 	.name           = "msm-battery",
