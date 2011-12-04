@@ -33,7 +33,11 @@ static struct snd_endpoint snd_endpoints_list[] = {
 	SND(IN_S_SADC_OUT_SPEAKER_PHONE, 25),
 	SND(CURRENT, 27),
 #else
+<<<<<<< HEAD
 /* LGE_CHANGE_S, [junyoub.an] , 2010-02-12, Define sound device*/
+=======
+/* Mike's CHANGE FIX AUDIO ROITING*/
+>>>>>>> 99b946dfb1badf6e2c3fd599317d42edc1a8a3a3
 	SND(HANDSET, 0),
 	SND(HEADSET_STEREO_AUDIO, 2),//31
 	SND(TTY_HEADSET, 2),				// alohag
@@ -59,7 +63,11 @@ static struct snd_endpoint snd_endpoints_list[] = {
 	SND(BT, 12),
 	SND(BT_A2DP, 11),//20
 	SND(CURRENT, 35),	
+<<<<<<< HEAD
 /* LGE_CHANGE_E, [junyoub.an] , 2010-02-12, Define sound device*/
+=======
+/* Mike's CHANGE FIX AUDIO ROITING*/
+>>>>>>> 99b946dfb1badf6e2c3fd599317d42edc1a8a3a3
 
 #endif
 };
