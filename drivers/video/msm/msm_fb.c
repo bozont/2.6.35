@@ -40,10 +40,6 @@
 #include <linux/android_pmem.h>
 #include <linux/leds.h>
 
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
-#include <mach/board_lge.h>
-#endif
-
 #define MSM_FB_C
 #include "msm_fb.h"
 #include "mddihosti.h"
@@ -79,13 +75,26 @@ static u32 msm_fb_pseudo_palette[16] = {
 	0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff
 };
 
+int msm_fb_refesh_enabled=1;
+
 u32 msm_fb_debug_enabled;
 /* Setting msm_fb_msg_level to 8 prints out ALL messages */
 u32 msm_fb_msg_level = 7;
 
 /* Setting mddi_msg_level to 8 prints out ALL messages */
 u32 mddi_msg_level = 5;
-int msm_fb_refesh_enabled = 1;	// LGE_CHANGE [bluerti@lge.com] 2009-07-18
+
+static int is_console_inactive = 0;
+
+static void msm_fb_set_console_inactive(int inactive)
+{
+	is_console_inactive = inactive;
+}
+
+int msm_fb_get_console_inactive(void)
+{
+	return is_console_inactive;
+}
 
 extern int32 mdp_block_power_cnt[MDP_MAX_BLOCK];
 extern unsigned long mdp_timer_duration;
@@ -103,38 +112,10 @@ static int msm_fb_set_par(struct fb_info *info);
 static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			    boolean op_enable);
 static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd);
+static int msm_fb_resume_sub(struct msm_fb_data_type *mfd);
 static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg);
 static int msm_fb_mmap(struct fb_info *info, struct vm_area_struct * vma);
-
-#if CONFIG_LGE_GRAM_REFRESH_PATCH
-static struct fb_var_screeninfo *last_var;
-static struct fb_info *last_info;
-static struct early_suspend additional_early_suspend;
-static void msmfb_early_suspend_early(struct early_suspend *h);
-static void msmfb_late_resume_late(struct early_suspend *h);
-#endif
-
-/* LGE_CHANGE_S
- * Change codes to remove console cursor on booting screen. Refered to VS740
- * 2010-07-31. minjong.gong@lge.com
- */
-#ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
-static int is_console_inactive = 0;
-
-static void msm_fb_set_console_inactive(int inactive)
-{
-
-       is_console_inactive = inactive;
-}
-
-int msm_fb_get_console_inactive(void)
-{
-       return is_console_inactive;
-}
-EXPORT_SYMBOL(msm_fb_get_console_inactive);
-#endif
-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com  */
 
 #ifdef MSM_FB_ENABLE_DBGFS
 
@@ -213,6 +194,7 @@ int msm_fb_detect_client(const char *name)
 	int ret = -EPERM;
 #ifdef CONFIG_FB_MSM_MDDI_AUTO_DETECT
 	u32 id;
+	id = mddi_get_client_id();
 #endif
 
 	if (msm_fb_pdata && msm_fb_pdata->detect_client) {
@@ -230,13 +212,9 @@ int msm_fb_detect_client(const char *name)
 	return ret;
 }
 
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
-void *lge_get_fb_addr(void)
-{
-	return (fbram - (320 * 480 * 2 * 2));
-}
-#endif
-
+extern wait_queue_head_t backlight_wait_q;
+extern atomic_t backlight_event_handle;
+extern atomic_t lcd_event_handled;
 static int msm_fb_probe(struct platform_device *pdev)
 {
 	struct msm_fb_data_type *mfd;
@@ -297,6 +275,8 @@ static int msm_fb_probe(struct platform_device *pdev)
 			lcd_backlight_registered = 1;
 	}
 #endif
+
+	atomic_set(&lcd_event_handled, 1);
 
 	pdev_list[pdev_list_cnt++] = pdev;
 	return 0;
@@ -369,12 +349,12 @@ static int msm_fb_suspend(struct platform_device *pdev, pm_message_t state)
 		return 0;
 
 	acquire_console_sem();
-	fb_set_suspend(mfd->fbi, FBINFO_STATE_SUSPENDED);
+	fb_set_suspend(mfd->fbi, 1);
 
 	ret = msm_fb_suspend_sub(mfd);
 	if (ret != 0) {
 		printk(KERN_ERR "msm_fb: failed to suspend! %d\n", ret);
-		fb_set_suspend(mfd->fbi, FBINFO_STATE_RUNNING);
+		fb_set_suspend(mfd->fbi, 0);
 	} else {
 		pdev->dev.power.power_state = state;
 	}
@@ -437,7 +417,33 @@ static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd)
 	return 0;
 }
 
-#ifdef CONFIG_PM
+#if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND)
+static int msm_fb_resume(struct platform_device *pdev)
+{
+	/* This resume function is called when interrupt is enabled.
+	 */
+	int ret = 0;
+	struct msm_fb_data_type *mfd;
+
+	MSM_FB_DEBUG("msm_fb_resume\n");
+
+	mfd = (struct msm_fb_data_type *)platform_get_drvdata(pdev);
+
+	if ((!mfd) || (mfd->key != MFD_KEY))
+		return 0;
+
+	acquire_console_sem();
+	ret = msm_fb_resume_sub(mfd);
+	pdev->dev.power.power_state = PMSG_ON;
+	fb_set_suspend(mfd->fbi, 1);
+	release_console_sem();
+
+	return ret;
+}
+#else
+#define msm_fb_resume NULL
+#endif
+
 static int msm_fb_resume_sub(struct msm_fb_data_type *mfd)
 {
 	int ret = 0;
@@ -463,40 +469,14 @@ static int msm_fb_resume_sub(struct msm_fb_data_type *mfd)
 
 	return ret;
 }
-#endif
-
-#if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND)
-static int msm_fb_resume(struct platform_device *pdev)
-{
-	/* This resume function is called when interrupt is enabled.
-	 */
-	int ret = 0;
-	struct msm_fb_data_type *mfd;
-
-	MSM_FB_DEBUG("msm_fb_resume\n");
-
-	mfd = (struct msm_fb_data_type *)platform_get_drvdata(pdev);
-
-	if ((!mfd) || (mfd->key != MFD_KEY))
-		return 0;
-
-	acquire_console_sem();
-	ret = msm_fb_resume_sub(mfd);
-	pdev->dev.power.power_state = PMSG_ON;
-	fb_set_suspend(mfd->fbi, FBINFO_STATE_RUNNING);
-	release_console_sem();
-
-	return ret;
-}
-#else
-#define msm_fb_resume NULL
-#endif
 
 static struct platform_driver msm_fb_driver = {
 	.probe = msm_fb_probe,
 	.remove = msm_fb_remove,
 #ifndef CONFIG_HAS_EARLYSUSPEND
 	.suspend = msm_fb_suspend,
+	.suspend_late = NULL,
+	.resume_early = NULL,
 	.resume = msm_fb_resume,
 #endif
 	.shutdown = NULL,
@@ -512,6 +492,7 @@ static void msmfb_early_suspend(struct early_suspend *h)
 	struct msm_fb_data_type *mfd = container_of(h, struct msm_fb_data_type,
 						    early_suspend);
 	msm_fb_suspend_sub(mfd);
+	atomic_set(&lcd_event_handled, 0);
 }
 
 static void msmfb_early_resume(struct early_suspend *h)
@@ -519,20 +500,9 @@ static void msmfb_early_resume(struct early_suspend *h)
 	struct msm_fb_data_type *mfd = container_of(h, struct msm_fb_data_type,
 						    early_suspend);
 	msm_fb_resume_sub(mfd);
+	atomic_set(&lcd_event_handled, 1);
+	wake_up(&backlight_wait_q);
 }
-
-#if CONFIG_LGE_GRAM_REFRESH_PATCH
-static void msmfb_early_suspend_early(struct early_suspend *h)
-{
-	/* do nothing */
-}
-
-static void msmfb_late_resume_late(struct early_suspend *h)
-{
-	memset((void *)last_info->screen_base, 0, last_info->fix.smem_len);
-	msm_fb_pan_display(last_var, last_info);
-}
-#endif
 #endif
 
 void msm_fb_set_backlight(struct msm_fb_data_type *mfd, __u32 bkl_lvl, u32 save)
@@ -992,14 +962,7 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	mfd->op_enable = TRUE;
 	mfd->panel_power_on = FALSE;
 
-/* LGE_CHANGE_S
- * Change codes to remove console cursor on booting screen. Refered to VS740
- * 2010-07-31. minjong.gong@lge.com
- */
-#ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
 	msm_fb_set_console_inactive(1);
-#endif
-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com */
 
 	/* cursor memory allocation */
 	if (mfd->cursor_update) {
@@ -1050,13 +1013,6 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	mfd->early_suspend.resume = msmfb_early_resume;
 	mfd->early_suspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB - 2;
 	register_early_suspend(&mfd->early_suspend);
-
-#if CONFIG_LGE_GRAM_REFRESH_PATCH
-	additional_early_suspend.suspend = msmfb_early_suspend_early;
-	additional_early_suspend.resume = msmfb_late_resume_late;
-	additional_early_suspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB - 10;
-	register_early_suspend(&additional_early_suspend);
-#endif
 #endif
 
 #ifdef MSM_FB_ENABLE_DBGFS
@@ -1202,15 +1158,8 @@ static int msm_fb_open(struct fb_info *info, int user)
 		}
 	}
 
-/* LGE_CHANGE_S
- * Change codes to remove console cursor on booting screen. Refered to VS740
- * 2010-07-31. minjong.gong@lge.com
- */
-#ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
-		if(mfd->ref_cnt > 1 && msm_fb_get_console_inactive())
-				msm_fb_set_console_inactive(0);
-#endif
-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com */
+	if (mfd->ref_cnt > 1 && msm_fb_get_console_inactive())
+		msm_fb_set_console_inactive(0);
 
 	mfd->ref_cnt++;
 	return 0;
@@ -1250,9 +1199,7 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 	struct mdp_dirty_region *dirtyPtr = NULL;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 
-	last_var = var;
-	last_info = info;
-
+if(msm_fb_refesh_enabled){
 	if ((!mfd->op_enable) || (!mfd->panel_power_on))
 		return -EPERM;
 
@@ -1310,6 +1257,9 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 	up(&msm_fb_pan_sem);
 
 	++mfd->panel_info.frame_count;
+	if (atomic_read(&backlight_event_handle) == 0)
+		atomic_set(&lcd_event_handled, 0);
+}
 	return 0;
 }
 
@@ -1358,33 +1308,20 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 		break;
 
 	case 32:
-		/* Figure out if the user meant RGBA or ARGB
-		   and verify the position of the RGB components */
-
-		if (var->transp.offset == 24) {
-			if ((var->blue.offset != 0) ||
-			    (var->green.offset != 8) ||
-			    (var->red.offset != 16))
+		if ((var->blue.offset != 8) ||
+			(var->green.offset != 16) ||
+			(var->red.offset != 24) ||
+			(var->blue.length != 8) ||
+			(var->green.length != 8) ||
+			(var->red.length != 8) ||
+			(var->blue.msb_right != 0) ||
+			(var->green.msb_right != 0) ||
+			(var->red.msb_right != 0) ||
+			!(((var->transp.offset == 0) &&
+				(var->transp.length == 8)) ||
+			((var->transp.offset == 0) &&
+				(var->transp.length == 8))))
 				return -EINVAL;
-		} else if (var->transp.offset == 0) {
-			if ((var->blue.offset != 8) ||
-			    (var->green.offset != 16) ||
-			    (var->red.offset != 24))
-				return -EINVAL;
-		} else
-			return -EINVAL;
-
-		/* Check the common values for both RGBA and ARGB */
-
-		if ((var->blue.length != 8) ||
-		    (var->green.length != 8) ||
-		    (var->red.length != 8) ||
-		    (var->transp.length != 8) ||
-		    (var->blue.msb_right != 0) ||
-		    (var->green.msb_right != 0) ||
-		    (var->red.msb_right != 0))
-			return -EINVAL;
-
 		break;
 
 	default:
@@ -1441,10 +1378,7 @@ static int msm_fb_set_par(struct fb_info *info)
 		break;
 
 	case 32:
-		if (var->transp.offset == 24)
-			mfd->fb_imgType = MDP_ARGB_8888;
-		else
-			mfd->fb_imgType = MDP_RGBA_8888;
+		mfd->fb_imgType = MDP_RGBA_8888;
 		break;
 
 	default:
@@ -1509,7 +1443,7 @@ int msm_fb_resume_sw_refresher(struct msm_fb_data_type *mfd)
 	return 0;
 }
 
-#if defined CONFIG_FB_MSM_MDP31
+#ifdef CONFIG_FB_MSM_MDP31
 static int mdp_blit_split_height(struct fb_info *info,
 				struct mdp_blit_req *req)
 {
@@ -1536,7 +1470,32 @@ static int mdp_blit_split_height(struct fb_info *info,
 		d_h_0 = 2;
 		d_y_1 = d_y_0 + 1;
 	}
-
+#if 0
+	/* break source roi */
+	if (splitreq.flags & MDP_ROT_90) {
+		s_y_0 = s_y_1 = req->src_rect.y;
+		s_h_0 = s_h_1 = req->src_rect.h;
+		s_x_0 = req->src_rect.x;
+		s_w_1 = (req->src_rect.w * d_h_1) / req->dst_rect.h;
+		s_w_0 = req->src_rect.w - s_w_1;
+		s_x_1 = s_x_0 + s_w_0;
+		if (d_h_1 >= 8 * s_w_1) {
+			s_w_1++;
+			s_x_1--;
+		}
+	} else {
+		s_x_0 = s_x_1 = req->src_rect.x;
+		s_w_0 = s_w_1 = req->src_rect.w;
+		s_y_0 = req->src_rect.y;
+		s_h_1 = (req->src_rect.h * d_h_1) / req->dst_rect.h;
+		s_h_0 = req->src_rect.h - s_h_1;
+		s_y_1 = s_y_0 + s_h_0;
+		if (d_h_1 >= 8 * s_h_1) {
+			s_h_1++;
+			s_y_1--;
+		}
+	}
+#endif
 	/* blit first region */
 	if (((splitreq.flags & 0x07) == 0x04) ||
 		((splitreq.flags & 0x07) == 0x0)) {
@@ -1564,15 +1523,14 @@ static int mdp_blit_split_height(struct fb_info *info,
 				s_y_1--;
 			}
 		}
-
-		splitreq.src_rect.h = s_h_0;
-		splitreq.src_rect.y = s_y_0;
-		splitreq.dst_rect.h = d_h_0;
-		splitreq.dst_rect.y = d_y_0;
-		splitreq.src_rect.x = s_x_0;
-		splitreq.src_rect.w = s_w_0;
-		splitreq.dst_rect.x = d_x_0;
-		splitreq.dst_rect.w = d_w_0;
+	splitreq.src_rect.h = s_h_0;
+	splitreq.src_rect.y = s_y_0;
+	splitreq.dst_rect.h = d_h_0;
+	splitreq.dst_rect.y = d_y_0;
+	splitreq.src_rect.x = s_x_0;
+	splitreq.src_rect.w = s_w_0;
+	splitreq.dst_rect.x = d_x_0;
+	splitreq.dst_rect.w = d_w_0;
 	} else {
 
 		if (splitreq.flags & MDP_ROT_90) {
@@ -1632,210 +1590,30 @@ static int mdp_blit_split_height(struct fb_info *info,
 		splitreq.dst_rect.x = d_x_0;
 		splitreq.dst_rect.w = d_w_0;
 	}
+#if 0
+	splitreq.src_rect.h = s_h_1;
+	splitreq.src_rect.y = s_y_1;
+	splitreq.dst_rect.h = d_h_1;
+	splitreq.dst_rect.y = d_y_1;
+	splitreq.src_rect.x = s_x_1;
+	splitreq.src_rect.w = s_w_1;
+	splitreq.dst_rect.x = d_x_1;
+	splitreq.dst_rect.w = d_w_1;
+#endif
 	ret = mdp_ppp_blit(info, &splitreq);
 	return ret;
 }
 #endif
 
-/* following is qct's comment
- * this is temporal patch
- * this patch will be included in qualcomm's next release.
- * next release may be CS in Aug.
- * so, we patch this code for pre-release test
- * 2010-07-29, cleaneye.kim@lge.com
- */
-// gciambel: 	cleaned this up to be MDP3.02 clean
-//		The tile processing is different and thus we a different check.
-//		Also, 7x27 does NOT have MN scaling and overhang issues in the height so no height splits are required
-//              I removed all of these from the code and ONLY split in the width
-//
-#ifdef CONFIG_MACH_LGE
-int mdp_blit(struct fb_info *info, struct mdp_blit_req *req) {
-	int ret;
-#if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
-	unsigned int remainder = 0, is_bpp_4 = 0;
-	struct mdp_blit_req splitreq;
-	int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
-	int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
-
-	if (req->flags & MDP_ROT_90) {
-		if (((req->dst_rect.h == 1) && ((req->src_rect.w != 1) ||
-				(req->dst_rect.w != req->src_rect.h))) ||
-				((req->dst_rect.w == 1) && ((req->src_rect.h != 1) ||
-					(req->dst_rect.h != req->src_rect.w)))) {
-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
-			return -EINVAL;
-		}
-	} else {
-		if (((req->dst_rect.w == 1) && ((req->src_rect.w != 1) ||
-						(req->dst_rect.h != req->src_rect.h))) ||
-				((req->dst_rect.h == 1) && ((req->src_rect.h != 1) ||
-					(req->dst_rect.w != req->src_rect.w)))) {
-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
-			return -EINVAL;
-		}
-	}
-#endif
-	if (unlikely(req->src_rect.h == 0 || req->src_rect.w == 0)) {
-		printk(KERN_ERR "mpd_ppp: src img of zero size!\n");
-		return -EINVAL;
-	}
-	if (unlikely(req->dst_rect.h == 0 || req->dst_rect.w == 0))
-		return 0;
-
-#if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
-	/* MDP width split workaround */
-	remainder = (req->dst_rect.w)%16;
-	is_bpp_4 = (mdp_get_bytes_per_pixel(req->dst.format) == 4) ? 1 : 0;
-
-	if ((is_bpp_4 && (remainder == 6 || remainder == 14)) ) {
-
-		/* make new request as provide by user */
-		splitreq = *req;
-
-		/* break dest roi at width*/
-		d_y_0 = d_y_1 = req->dst_rect.y;
-		d_h_0 = d_h_1 = req->dst_rect.h;
-		d_x_0 = req->dst_rect.x;
-
-		if (remainder == 14)
-			d_w_1 = (req->dst_rect.w - 14) / 2 + 4;
-		else if (remainder == 6)
-			d_w_1 = req->dst_rect.w / 2 - 1;
-		else
-			d_w_1 = (req->dst_rect.w - 1) / 2 - 1;
-
-		d_w_0 = req->dst_rect.w - d_w_1;
-		d_x_1 = d_x_0 + d_w_0;
-
-		/* blit first region */
-		if (((splitreq.flags & 0x07) == 0x07) ||
-				((splitreq.flags & 0x07) == 0x0)) {
-
-			if (splitreq.flags & MDP_ROT_90) {
-				s_x_0 = s_x_1 = req->src_rect.x;
-				s_w_0 = s_w_1 = req->src_rect.w;
-				s_y_0 = req->src_rect.y;
-				s_h_1 = (req->src_rect.h * d_w_1) /
-					req->dst_rect.w;
-				s_h_0 = req->src_rect.h - s_h_1;
-				s_y_1 = s_y_0 + s_h_0;
-				if (d_w_1 >= 8 * s_h_1) {
-					s_h_1++;
-					s_y_1--;
-				}
-			} else {
-				s_y_0 = s_y_1 = req->src_rect.y;
-				s_h_0 = s_h_1 = req->src_rect.h;
-				s_x_0 = req->src_rect.x;
-				s_w_1 = (req->src_rect.w * d_w_1) /
-					req->dst_rect.w;
-				s_w_0 = req->src_rect.w - s_w_1;
-				s_x_1 = s_x_0 + s_w_0;
-				if (d_w_1 >= 8 * s_w_1) {
-					s_w_1++;
-					s_x_1--;
-				}
-			}
-
-			splitreq.src_rect.h = s_h_0;
-			splitreq.src_rect.y = s_y_0;
-			splitreq.dst_rect.h = d_h_0;
-			splitreq.dst_rect.y = d_y_0;
-			splitreq.src_rect.x = s_x_0;
-			splitreq.src_rect.w = s_w_0;
-			splitreq.dst_rect.x = d_x_0;
-			splitreq.dst_rect.w = d_w_0;
-		} else {
-			if (splitreq.flags & MDP_ROT_90) {
-				s_x_0 = s_x_1 = req->src_rect.x;
-				s_w_0 = s_w_1 = req->src_rect.w;
-				s_y_0 = req->src_rect.y;
-				s_h_1 = (req->src_rect.h * d_w_0) /
-					req->dst_rect.w;
-				s_h_0 = req->src_rect.h - s_h_1;
-				s_y_1 = s_y_0 + s_h_0;
-				if (d_w_0 >= 8 * s_h_1) {
-					s_h_1++;
-					s_y_1--;
-				}
-			} else {
-				s_y_0 = s_y_1 = req->src_rect.y;
-				s_h_0 = s_h_1 = req->src_rect.h;
-				s_x_0 = req->src_rect.x;
-				s_w_1 = (req->src_rect.w * d_w_0) /
-					req->dst_rect.w;
-				s_w_0 = req->src_rect.w - s_w_1;
-				s_x_1 = s_x_0 + s_w_0;
-				if (d_w_0 >= 8 * s_w_1) {
-					s_w_1++;
-					s_x_1--;
-				}
-			}
-			splitreq.src_rect.h = s_h_0;
-			splitreq.src_rect.y = s_y_0;
-			splitreq.dst_rect.h = d_h_1;
-			splitreq.dst_rect.y = d_y_1;
-			splitreq.src_rect.x = s_x_0;
-			splitreq.src_rect.w = s_w_0;
-			splitreq.dst_rect.x = d_x_1;
-			splitreq.dst_rect.w = d_w_1;
-		}
-
-		// No need to split in height
-		ret = mdp_ppp_blit(info, &splitreq);
-
-		if (ret)
-			return ret;
-
-		/* blit second region */
-		if (((splitreq.flags & 0x07) == 0x07) ||
-				((splitreq.flags & 0x07) == 0x0)) {
-			splitreq.src_rect.h = s_h_1;
-			splitreq.src_rect.y = s_y_1;
-			splitreq.dst_rect.h = d_h_1;
-			splitreq.dst_rect.y = d_y_1;
-			splitreq.src_rect.x = s_x_1;
-			splitreq.src_rect.w = s_w_1;
-			splitreq.dst_rect.x = d_x_1;
-			splitreq.dst_rect.w = d_w_1;
-		} else {
-			splitreq.src_rect.h = s_h_1;
-			splitreq.src_rect.y = s_y_1;
-			splitreq.dst_rect.h = d_h_0;
-			splitreq.dst_rect.y = d_y_0;
-			splitreq.src_rect.x = s_x_1;
-			splitreq.src_rect.w = s_w_1;
-			splitreq.dst_rect.x = d_x_0;
-			splitreq.dst_rect.w = d_w_0;
-		}
-
-		// No need to split in height ... just width
-		ret = mdp_ppp_blit(info, &splitreq);
-
-		if (ret)
-			return ret;
-
-	} 
-	else
-		ret = mdp_ppp_blit(info, req);
-	return ret;
-#else
-	ret = mdp_ppp_blit(info, req);
-	return ret;
-#endif
-}
-
-#else
 int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 {
 	int ret;
-#if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
+#ifdef CONFIG_FB_MSM_MDP31
 	unsigned int remainder = 0, is_bpp_4 = 0;
+//	unsigned int remainder = 0, is_rem_6 = 0, is_bpp_4 = 0;
 	struct mdp_blit_req splitreq;
 	int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
 	int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
-
 	if (req->flags & MDP_ROT_90) {
 		if (((req->dst_rect.h == 1) && ((req->src_rect.w != 1) ||
 			(req->dst_rect.w != req->src_rect.h))) ||
@@ -1848,7 +1626,7 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 		if (((req->dst_rect.w == 1) && ((req->src_rect.w != 1) ||
 			(req->dst_rect.h != req->src_rect.h))) ||
 			((req->dst_rect.h == 1) && ((req->src_rect.h != 1) ||
-			(req->dst_rect.w != req->src_rect.w)))) {
+			(req->dst_rect.h != req->src_rect.h)))) {
 			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
 			return -EINVAL;
 		}
@@ -1861,15 +1639,10 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 	if (unlikely(req->dst_rect.h == 0 || req->dst_rect.w == 0))
 		return 0;
 
-#if defined CONFIG_FB_MSM_MDP31
+#ifdef CONFIG_FB_MSM_MDP31
 	/* MDP width split workaround */
 	remainder = (req->dst_rect.w)%32;
-	ret = mdp_get_bytes_per_pixel(req->dst.format);
-	if (ret <= 0) {
-		printk(KERN_ERR "mdp_ppp: incorrect bpp!\n");
-		return -EINVAL;
-	}
-	is_bpp_4 = (ret == 4) ? 1 : 0;
+	is_bpp_4 = (mdp_get_bytes_per_pixel(req->dst.format) == 4) ? 1 : 0;
 
 	if ((is_bpp_4 && (remainder == 6 || remainder == 14 ||
 	remainder == 22 || remainder == 30)) || remainder == 3 ||
@@ -2023,18 +1796,20 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 	else
 		ret = mdp_ppp_blit(info, req);
 	return ret;
-#elif defined CONFIG_FB_MSM_MDP30
+#else
+	ret = mdp_ppp_blit(info, req);
+	return ret;
+#endif
+
+#if 0
+#ifdef CONFIG_FB_MSM_MDP31
 	/* MDP width split workaround */
-	remainder = (req->dst_rect.w)%16;
-	ret = mdp_get_bytes_per_pixel(req->dst.format);
-	if (ret <= 0) {
-		printk(KERN_ERR "mdp_ppp: incorrect bpp!\n");
-		return -EINVAL;
-	}
-	is_bpp_4 = (ret == 4) ? 1 : 0;
+	remainder = (req->dst_rect.w)%32;
+	is_rem_6 = (remainder == 6) ? 1 : 0;
+	is_bpp_4 = (mdp_get_bytes_per_pixel(req->dst.format) == 4) ? 1 : 0;
 
-	if ((is_bpp_4 && (remainder == 6 || remainder == 14))) {
-
+	if ((is_bpp_4 && (is_rem_6 || remainder == 14 || remainder == 22 ||
+		remainder == 30)) || remainder == 3 || remainder == 1) {
 		/* make new request as provide by user */
 		splitreq = *req;
 
@@ -2042,134 +1817,92 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 		d_y_0 = d_y_1 = req->dst_rect.y;
 		d_h_0 = d_h_1 = req->dst_rect.h;
 		d_x_0 = req->dst_rect.x;
-
-		if (remainder == 14)
-			d_w_1 = (req->dst_rect.w - 14) / 2 + 4;
-		else if (remainder == 6)
+		if (!(req->dst_rect.w % 2) && !is_rem_6)
+			d_w_1 = req->dst_rect.w / 2;
+		else if (is_rem_6)
 			d_w_1 = req->dst_rect.w / 2 - 1;
+		else if (remainder == 3)
+			d_w_1 = (req->dst_rect.w - 3) / 2 - 1;
 		else
 			d_w_1 = (req->dst_rect.w - 1) / 2 - 1;
-
 		d_w_0 = req->dst_rect.w - d_w_1;
 		d_x_1 = d_x_0 + d_w_0;
+		if (req->dst_rect.w == 3) {
+			d_w_1 = 2;
+			d_w_0 = 2;
+			d_x_1 = d_x_0 + 1;
+		}
+
+		/* break src roi at height or width*/
+		if (splitreq.flags & MDP_ROT_90) {
+			s_x_0 = s_x_1 = req->src_rect.x;
+			s_w_0 = s_w_1 = req->src_rect.w;
+			s_y_0 = req->src_rect.y;
+			s_h_1 = (req->src_rect.h * d_w_1) / req->dst_rect.w;
+			s_h_0 = req->src_rect.h - s_h_1;
+			s_y_1 = s_y_0 + s_h_0;
+			if (d_w_1 >= 8 * s_h_1) {
+				s_h_1++;
+				s_y_1--;
+			}
+		} else {
+			s_y_0 = s_y_1 = req->src_rect.y;
+			s_h_0 = s_h_1 = req->src_rect.h;
+			s_x_0 = req->src_rect.x;
+			s_w_1 = (req->src_rect.w * d_w_1) / req->dst_rect.w;
+			s_w_0 = req->src_rect.w - s_w_1;
+			s_x_1 = s_x_0 + s_w_0;
+			if (d_w_1 >= 8 * s_w_1) {
+				s_w_1++;
+				s_x_1--;
+			}
+		}
 
 		/* blit first region */
-		if (((splitreq.flags & 0x07) == 0x07) ||
-			((splitreq.flags & 0x07) == 0x0)) {
+		splitreq.src_rect.h = s_h_0;
+		splitreq.src_rect.y = s_y_0;
+		splitreq.dst_rect.h = d_h_0;
+		splitreq.dst_rect.y = d_y_0;
+		splitreq.src_rect.x = s_x_0;
+		splitreq.src_rect.w = s_w_0;
+		splitreq.dst_rect.x = d_x_0;
+		splitreq.dst_rect.w = d_w_0;
 
-			if (splitreq.flags & MDP_ROT_90) {
-				s_x_0 = s_x_1 = req->src_rect.x;
-				s_w_0 = s_w_1 = req->src_rect.w;
-				s_y_0 = req->src_rect.y;
-				s_h_1 = (req->src_rect.h * d_w_1) /
-					req->dst_rect.w;
-				s_h_0 = req->src_rect.h - s_h_1;
-				s_y_1 = s_y_0 + s_h_0;
-				if (d_w_1 >= 8 * s_h_1) {
-					s_h_1++;
-					s_y_1--;
-				}
-			} else {
-				s_y_0 = s_y_1 = req->src_rect.y;
-				s_h_0 = s_h_1 = req->src_rect.h;
-				s_x_0 = req->src_rect.x;
-				s_w_1 = (req->src_rect.w * d_w_1) /
-					req->dst_rect.w;
-				s_w_0 = req->src_rect.w - s_w_1;
-				s_x_1 = s_x_0 + s_w_0;
-				if (d_w_1 >= 8 * s_w_1) {
-					s_w_1++;
-					s_x_1--;
-				}
-			}
-
-			splitreq.src_rect.h = s_h_0;
-			splitreq.src_rect.y = s_y_0;
-			splitreq.dst_rect.h = d_h_0;
-			splitreq.dst_rect.y = d_y_0;
-			splitreq.src_rect.x = s_x_0;
-			splitreq.src_rect.w = s_w_0;
-			splitreq.dst_rect.x = d_x_0;
-			splitreq.dst_rect.w = d_w_0;
-		} else {
-			if (splitreq.flags & MDP_ROT_90) {
-				s_x_0 = s_x_1 = req->src_rect.x;
-				s_w_0 = s_w_1 = req->src_rect.w;
-				s_y_0 = req->src_rect.y;
-				s_h_1 = (req->src_rect.h * d_w_0) /
-					req->dst_rect.w;
-				s_h_0 = req->src_rect.h - s_h_1;
-				s_y_1 = s_y_0 + s_h_0;
-				if (d_w_0 >= 8 * s_h_1) {
-					s_h_1++;
-					s_y_1--;
-				}
-			} else {
-				s_y_0 = s_y_1 = req->src_rect.y;
-				s_h_0 = s_h_1 = req->src_rect.h;
-				s_x_0 = req->src_rect.x;
-				s_w_1 = (req->src_rect.w * d_w_0) /
-					req->dst_rect.w;
-				s_w_0 = req->src_rect.w - s_w_1;
-				s_x_1 = s_x_0 + s_w_0;
-				if (d_w_0 >= 8 * s_w_1) {
-					s_w_1++;
-					s_x_1--;
-				}
-			}
-			splitreq.src_rect.h = s_h_0;
-			splitreq.src_rect.y = s_y_0;
-			splitreq.dst_rect.h = d_h_1;
-			splitreq.dst_rect.y = d_y_1;
-			splitreq.src_rect.x = s_x_0;
-			splitreq.src_rect.w = s_w_0;
-			splitreq.dst_rect.x = d_x_1;
-			splitreq.dst_rect.w = d_w_1;
-		}
-
-		/* No need to split in height */
-		ret = mdp_ppp_blit(info, &splitreq);
-
+		if (((splitreq.dst_rect.h % 32 == 3) ||
+			(splitreq.dst_rect.h % 32) == 1))
+			ret = mdp_blit_split_height(info, &splitreq);
+		else
+			ret = mdp_ppp_blit(info, &splitreq);
 		if (ret)
 			return ret;
-
 		/* blit second region */
-		if (((splitreq.flags & 0x07) == 0x07) ||
-			((splitreq.flags & 0x07) == 0x0)) {
-			splitreq.src_rect.h = s_h_1;
-			splitreq.src_rect.y = s_y_1;
-			splitreq.dst_rect.h = d_h_1;
-			splitreq.dst_rect.y = d_y_1;
-			splitreq.src_rect.x = s_x_1;
-			splitreq.src_rect.w = s_w_1;
-			splitreq.dst_rect.x = d_x_1;
-			splitreq.dst_rect.w = d_w_1;
-		} else {
-			splitreq.src_rect.h = s_h_1;
-			splitreq.src_rect.y = s_y_1;
-			splitreq.dst_rect.h = d_h_0;
-			splitreq.dst_rect.y = d_y_0;
-			splitreq.src_rect.x = s_x_1;
-			splitreq.src_rect.w = s_w_1;
-			splitreq.dst_rect.x = d_x_0;
-			splitreq.dst_rect.w = d_w_0;
-		}
-
-		/* No need to split in height ... just width */
-		ret = mdp_ppp_blit(info, &splitreq);
-
+		splitreq.src_rect.h = s_h_1;
+		splitreq.src_rect.y = s_y_1;
+		splitreq.dst_rect.h = d_h_1;
+		splitreq.dst_rect.y = d_y_1;
+		splitreq.src_rect.x = s_x_1;
+		splitreq.src_rect.w = s_w_1;
+		splitreq.dst_rect.x = d_x_1;
+		splitreq.dst_rect.w = d_w_1;
+		if (((splitreq.dst_rect.h % 32) == 3 ||
+			(splitreq.dst_rect.h % 32) == 1))
+			ret = mdp_blit_split_height(info, &splitreq);
+		else
+			ret = mdp_ppp_blit(info, &splitreq);
 		if (ret)
 			return ret;
-
-	} else
+	} else if ((req->dst_rect.h % 32) == 3 ||
+		(req->dst_rect.h % 32) == 1)
+		ret = mdp_blit_split_height(info, req);
+	else
 		ret = mdp_ppp_blit(info, req);
 	return ret;
 #else
 	ret = mdp_ppp_blit(info, req);
 	return ret;
 #endif
-}
 #endif
+}
 
 typedef void (*msm_dma_barrier_function_pointer) (void *, size_t);
 
@@ -2185,17 +1918,12 @@ static inline void msm_fb_dma_barrier_for_rect(struct fb_info *info,
 	 *       included in the address range rather than
 	 *       doing multiple calls for each row.
 	 */
-	unsigned long start;
-	size_t size;
+
 	char * const pmem_start = info->screen_base;
 	int bytes_per_pixel = mdp_get_bytes_per_pixel(img->format);
-	if (bytes_per_pixel <= 0) {
-		printk(KERN_ERR "%s incorrect bpp!\n", __func__);
-		return;
-	}
-	start = (unsigned long)pmem_start + img->offset +
+	unsigned long start = (unsigned long)pmem_start + img->offset +
 		(img->width * rect->y + rect->x) * bytes_per_pixel;
-	size  = (rect->h * img->width + rect->w) * bytes_per_pixel;
+	size_t size  = (rect->h * img->width + rect->w) * bytes_per_pixel;
 	(*dma_barrier_fp) ((void *) start, size);
 
 }
@@ -2554,10 +2282,8 @@ static int msmfb_overlay_play(struct fb_info *info, unsigned long *argp)
 
 	ret = mdp4_overlay_play(info, &req, &p_src_file);
 
-#ifdef CONFIG_ANDROID_PMEM
 	if (p_src_file)
 		put_pmem_file(p_src_file);
-#endif
 
 	return ret;
 }
@@ -2637,6 +2363,13 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 #endif
 	struct mdp_page_protection fb_page_protection;
 	int ret = 0;
+
+#ifdef CONFIG_FB_MSM_OVERLAY
+	/* always let unset cmd go */
+	if (cmd != MSMFB_OVERLAY_UNSET)
+#endif
+		if (!mfd->op_enable)
+			return -EPERM;
 
 	switch (cmd) {
 #ifdef CONFIG_FB_MSM_OVERLAY
@@ -2925,23 +2658,6 @@ void msm_fb_add_device(struct platform_device *pdev)
 	}
 }
 EXPORT_SYMBOL(msm_fb_add_device);
-
-int get_fb_phys_info(unsigned long *start, unsigned long *len, int fb_num)
-{
-	struct fb_info *info;
-
-	if (fb_num > MAX_FBI_LIST)
-		return -1;
-
-	info = fbi_list[fb_num];
-	if (!info)
-		return -1;
-
-	*start = info->fix.smem_start;
-	*len = info->fix.smem_len;
-	return 0;
-}
-EXPORT_SYMBOL(get_fb_phys_info);
 
 int __init msm_fb_init(void)
 {
