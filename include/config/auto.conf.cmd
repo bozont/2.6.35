@@ -245,7 +245,6 @@ deps_config := \
 	drivers/video/omap2/dss/Kconfig \
 	drivers/video/omap2/Kconfig \
 	drivers/video/omap/Kconfig \
-	drivers/video/msm/vidc/Kconfig \
 	drivers/video/msm/Kconfig \
 	drivers/video/geode/Kconfig \
 	drivers/gpu/msm/Kconfig \
@@ -614,7 +613,7 @@ deps_config := \
 include/config/auto.conf: \
 	$(deps_config)
 
-ifneq "$(KERNELVERSION)" "2.6.35.10"
+ifneq "$(KERNELVERSION)" "2.6.35.10_GT540"
 include/config/auto.conf: FORCE
 endif
 ifneq "$(ARCH)" "arm"

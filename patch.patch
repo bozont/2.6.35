@@ -1,0 +1,2906 @@
+From f299f775dd133162adccdd6fc677072a07ba70cd Mon Sep 17 00:00:00 2001
+From: mik_os <kiril.mik.os@gmail.com>
+Date: Tue, 8 Mar 2011 10:22:35 +0200
+Subject: [PATCH 1/3] Use defines instead of hardcode.
+
+---
+ arch/arm/mach-msm/lge/board-thunderg-panel.c |    6 +++---
+ 1 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/mach-msm/lge/board-thunderg-panel.c b/arch/arm/mach-msm/lge/board-thunderg-panel.c
+index a9cf36a..ff73058 100644
+--- a/arch/arm/mach-msm/lge/board-thunderg-panel.c
++++ b/arch/arm/mach-msm/lge/board-thunderg-panel.c
+@@ -105,9 +105,9 @@ static int mddi_hitachi_pmic_backlight(int level)
+ /* backlight device */
+ static struct gpio_i2c_pin bl_i2c_pin[] = {
+ 	[0] = {
+-		.sda_pin	= 89,
+-		.scl_pin	= 88,
+-		.reset_pin	= 82,
++		.sda_pin	= GPIO_BL_I2C_SDA,
++		.scl_pin	= GPIO_BL_I2C_SCL,
++		.reset_pin	= GPIO_LCD_BL_EN,
+ 		.irq_pin	= 0,
+ 	},
+ };
+-- 
+1.7.5.4
+
+
+From b3b7e1f5050a9d54c26c48d7c538df56697f2a35 Mon Sep 17 00:00:00 2001
+From: mik_os <kiril.mik.os@gmail.com>
+Date: Tue, 8 Mar 2011 10:24:19 +0200
+Subject: [PATCH 2/3] Port of ThunderC 2.6.32.26 msm framebuffer. Disabled
+ early_suspend.
+
+---
+ drivers/video/msm/Makefile             |    5 +
+ drivers/video/msm/lcdc_sharp_wvga_pt.c |    2 +-
+ drivers/video/msm/mddi.c               |   15 +
+ drivers/video/msm/mddi_hitachi_hvga.c  |  241 +++++++----
+ drivers/video/msm/mddi_novatek_hvga.c  |  760 ++++++++++++++++++++++++++------
+ drivers/video/msm/mddihost.h           |    5 +
+ drivers/video/msm/mdp.c                |    4 +
+ drivers/video/msm/mdp4_overlay_lcdc.c  |    2 +-
+ drivers/video/msm/mdp_dma.c            |  192 +++++----
+ drivers/video/msm/mdp_dma_lcdc.c       |    2 +-
+ drivers/video/msm/mdp_dma_tv.c         |    2 +-
+ drivers/video/msm/mdp_hw_init.c        |  169 +++++++-
+ drivers/video/msm/mdp_ppp.c            |   28 +-
+ drivers/video/msm/msm_fb.c             |  558 ++++++++----------------
+ include/linux/msm_mdp.h                |    3 +
+ 15 files changed, 1261 insertions(+), 727 deletions(-)
+ mode change 100644 => 100755 drivers/video/msm/Makefile
+ mode change 100644 => 100755 drivers/video/msm/mddi_hitachi_hvga.c
+ mode change 100644 => 100755 drivers/video/msm/mddi_novatek_hvga.c
+ mode change 100644 => 100755 drivers/video/msm/mdp_hw.h
+ mode change 100644 => 100755 drivers/video/msm/mdp_hw_init.c
+ mode change 100644 => 100755 drivers/video/msm/mdp_ppp.c
+
+diff --git a/drivers/video/msm/Makefile b/drivers/video/msm/Makefile
+old mode 100644
+new mode 100755
+index 4819d9a..e7ef36e
+--- a/drivers/video/msm/Makefile
++++ b/drivers/video/msm/Makefile
+@@ -82,6 +82,11 @@ obj-$(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) += mddi_hitachi_hvga.o
+ obj-$(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA) += mddi_novatek_hvga.o
+ endif
+ 
++ifeq ($(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA),y)
++obj-y += mddi_hitachi_hvga.o
++obj-y += mddi_novatek_hvga.o
++endif
++
+ obj-$(CONFIG_FB_MSM_LCDC_PANEL) += lcdc_panel.o
+ obj-$(CONFIG_FB_MSM_LCDC_PRISM_WVGA) += lcdc_prism.o
+ obj-$(CONFIG_FB_MSM_LCDC_SAMSUNG_WSVGA) += lcdc_samsung_wsvga.o
+diff --git a/drivers/video/msm/lcdc_sharp_wvga_pt.c b/drivers/video/msm/lcdc_sharp_wvga_pt.c
+index 45866a0..348c753 100644
+--- a/drivers/video/msm/lcdc_sharp_wvga_pt.c
++++ b/drivers/video/msm/lcdc_sharp_wvga_pt.c
+@@ -262,7 +262,7 @@ static int lcdc_sharp_panel_off(struct platform_device *pdev)
+ 		serigo(31, 0xC1);
+ 		mdelay(40);
+ 		serigo(31, 0x00);
+-		mdelay(100);
++		msleep(16);
+ 		sharp_state.display_on = FALSE;
+ 		sharp_state.disp_initialized = FALSE;
+ 	}
+diff --git a/drivers/video/msm/mddi.c b/drivers/video/msm/mddi.c
+index a64ad60..b0d0045 100644
+--- a/drivers/video/msm/mddi.c
++++ b/drivers/video/msm/mddi.c
+@@ -33,6 +33,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/clk.h>
+ #include <linux/platform_device.h>
++#include <linux/pm_qos_params.h>
+ 
+ #include "msm_fb.h"
+ #include "mddihosti.h"
+@@ -40,6 +41,11 @@
+ #include <mach/gpio.h>
+ #include <mach/clk.h>
+ 
++#ifdef CONFIG_HAS_EARLYSUSPEND
++#undef CONFIG_HAS_EARLYSUSPEND
++#endif
++
++
+ static int mddi_probe(struct platform_device *pdev);
+ static int mddi_remove(struct platform_device *pdev);
+ 
+@@ -88,6 +94,9 @@ static int mddi_off(struct platform_device *pdev)
+ 	if (mddi_pdata && mddi_pdata->mddi_power_save)
+ 		mddi_pdata->mddi_power_save(0);
+ 
++	pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ , "mddi",
++				  PM_QOS_DEFAULT_VALUE);
++
+ 	return ret;
+ }
+ 
+@@ -116,6 +125,9 @@ static int mddi_on(struct platform_device *pdev)
+ 		printk(KERN_ERR "%s: clk_set_min_rate failed\n",
+ 			__func__);
+ 
++	pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ , "mddi",
++				  65000);
++
+ 	ret = panel_next_on(pdev);
+ 
+ 	return ret;
+@@ -243,6 +255,9 @@ static int mddi_probe(struct platform_device *pdev)
+ 	register_early_suspend(&mfd->mddi_early_suspend);
+ #endif
+ 
++	pm_qos_add_requirement(PM_QOS_SYSTEM_BUS_FREQ , "mddi",
++			       PM_QOS_DEFAULT_VALUE);
++
+ 	return 0;
+ 
+ mddi_probe_err:
+diff --git a/drivers/video/msm/mddi_hitachi_hvga.c b/drivers/video/msm/mddi_hitachi_hvga.c
+old mode 100644
+new mode 100755
+index aa1fc51..b6020fc
+--- a/drivers/video/msm/mddi_hitachi_hvga.c
++++ b/drivers/video/msm/mddi_hitachi_hvga.c
+@@ -26,6 +26,8 @@
+ #include <mach/vreg.h>
+ #include <mach/board_lge.h>
+ 
++//#define DRV_AUO_PANEL
++
+ #define PANEL_DEBUG 0
+ 
+ #define LCD_CONTROL_BLOCK_BASE	0x110000
+@@ -52,14 +54,10 @@
+ static void *mddi_hitachi_vsync_handler_arg;
+ static uint16 mddi_hitachi_vsync_attempts;
+ 
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC) || defined(CONFIG_MACH_MSM7X27_THUNDERA)
+ /* Define new structure named 'msm_panel_hitachi_pdata' to use LCD initialization Flag (initialized)
+  * 2010-04-21, minjong.gong@lge.com
+  */
+ static struct msm_panel_hitachi_pdata *mddi_hitachi_pdata;
+-#else
+-static struct msm_panel_common_pdata *mddi_hitachi_pdata;
+-#endif
+ 
+ static int mddi_hitachi_lcd_on(struct platform_device *pdev);
+ static int mddi_hitachi_lcd_off(struct platform_device *pdev);
+@@ -116,6 +114,15 @@ struct display_table2 {
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+ 
++/* LGE_CHANGE_S [james.jang@lge.com] 2010-11-09, AUO LCD Pannel */
++static struct display_table mddi_hitachi_display_on_auo[] = {
++	// Display on sequence
++	{0x11, 4, {0x00, 0x00, 0x00, 0x00}},
++	{REGFLAG_DELAY, 120, {}},
++	{0x29, 4, {0x00, 0x00, 0x00, 0x00}},
++	{REGFLAG_END_OF_TABLE, 0x00, {}}
++};
++/* LGE_CHANGE_E [james.jang@lge.com] 2010-11-09 */
+ #if 0
+ static struct display_table2 mddi_hitachi_img[] = {
+ 	{0x2c, 16384, {}},
+@@ -220,21 +227,21 @@ struct display_table2 {
+ 			    0x3f, 0x66, 0x02, 0x3f, 0x66, 0x02, 0x00, 0x00}},
+ 
+ 	// VCMCTL 
+-	// Revert 6th parameter. From 0x04 to 0x00. 2010-09-02. minjong.gong@lge.com
+-	{0xf5, 12, {0x00, 0x59, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00,
++	// [Apply 4th Table] Change 6th parameter. From 0x00 to 0x04. 2010-08-03. minjong.gong@lge.com
++	{0xf5, 12, {0x00, 0x59, 0x45, 0x00, 0x00, 0x04, 0x00, 0x00,
+ 			    0x00, 0x00, 0x59, 0x45}},
+ 	{REGFLAG_DELAY, 10, {}},
+ 
+ 	// MANPWRSEQ 
+-	// Revert 1st parameter. From 0x03 to 0x01. 2010-09-02. minjong.gong@lge.com
+-	{0xf3, 8,  {0x01, 0x6e, 0x15, 0x07, 0x03, 0x00, 0x00, 0x00}},
++	// [Apply 4th Table] Change 1st parameter. From 0x01 to 0x03. 2010-08-03. minjong.gong@lge.com
++	{0xf3, 8,  {0x03, 0x6e, 0x15, 0x07, 0x03, 0x00, 0x00, 0x00}},
+ 	
+ 	// DISCTL 
+-	// Revert 2nd and 15th parameters. From 0x54 to 0x4d.
+-	// Revert 6th, 7th, 9th and 10th parameters. From 0x08 to ox00.
+-	// 2010-09-02. minjong.gong@lge.com
+-	{0xf2, 20, {0x3b, 0x4d, 0x0f, 0x08, 0x08, 0x00, 0x00, 0x00,
+-			    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x4d, 0x08,
++	// Change 2nd and 15th parameters. From 0x4d to 0x54.
++	// When useing 0x4D (65Hz), it causes decreasing the touch sensitivity.
++	// 2010-08-21. minjong.gong@lge.com
++	{0xf2, 20, {0x3b, 0x54, 0x0f, 0x08, 0x08, 0x08, 0x08, 0x00,
++			    0x08, 0x08, 0x00, 0x04, 0x00, 0x00, 0x54, 0x08,
+ 			    0x08, 0x08, 0x08, 0x00}},
+ 
+ 	{0xf6, 12, {0x04, 0x00, 0x08, 0x03, 0x01, 0x00, 0x01, 0x00,
+@@ -274,21 +281,21 @@ struct display_table2 {
+ 			    0x04, 0x66, 0x02, 0x04, 0x66, 0x02, 0x00, 0x00}},
+ 
+ 	// VCMCTL 
+-	// Revert 6th parameter. From 0x04 to 0x00. 2010-09-02. minjong.gong@lge.com
+-	{0xf5, 12, {0x00, 0x59, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00,
++	// [Apply 4th Table] Change 6th parameter. From 0x00 to 0x04. 2010-08-03. minjong.gong@lge.com
++	{0xf5, 12, {0x00, 0x59, 0x45, 0x00, 0x00, 0x04, 0x00, 0x00,
+ 			    0x00, 0x00, 0x59, 0x45}},
+ 	{REGFLAG_DELAY, 10, {}},
+ 
+ 	// MANPWRSEQ 
+-	// Revert 1st parameter. From 0x03 to 0x01. 2010-09-02. minjong.gong@lge.com
+-	{0xf3, 8,  {0x01, 0x6e, 0x15, 0x07, 0x03, 0x00, 0x00, 0x00}},
++	// [Apply 4th Table] Change 1st parameter. From 0x01 to 0x03. 2010-08-03. minjong.gong@lge.com
++	{0xf3, 8,  {0x03, 0x6e, 0x15, 0x07, 0x03, 0x00, 0x00, 0x00}},
+ 	
+ 	// DISCTL 
+-	// Revert 2nd and 15th parameters. From 0x54 to 0x4d.
+-	// Revert 6th, 7th, 9th and 10th parameters. From 0x08 to ox00.
+-	// 2010-09-02. minjong.gong@lge.com
+-	{0xf2, 20, {0x3b, 0x4d, 0x0f, 0x08, 0x08, 0x00, 0x00, 0x00,
+-			    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x4d, 0x08,
++	// Change 2nd and 15th parameters. From 0x4d to 0x54.
++	// When useing 0x4D (65Hz), it causes decreasing the touch sensitivity.
++	// 2010-08-21. minjong.gong@lge.com
++	{0xf2, 20, {0x3b, 0x54, 0x0f, 0x08, 0x08, 0x08, 0x08, 0x00,
++			    0x08, 0x08, 0x00, 0x04, 0x00, 0x00, 0x54, 0x08,
+ 			    0x08, 0x08, 0x08, 0x00}},
+ 
+ 	{0xf6, 12, {0x04, 0x00, 0x08, 0x03, 0x01, 0x00, 0x01, 0x00,
+@@ -317,7 +324,113 @@ struct display_table2 {
+ 
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+-void display_table(struct display_table *table, unsigned int count)
++
++/* LGE_CHANGE_S [james.jang@lge.com] 2010-11-09, AUO LCD Pannel */
++static struct display_table mddi_hitachi_initialize_auo[] = {
++
++	// Power ON Sequence 
++	{0xf0, 4, {0x5a, 0x5a, 0x00, 0x00}},
++	{0xf1, 4, {0x5a, 0x5a, 0x00, 0x00}},
++
++	// DISCTL - 67.2HZ(0x4b) 70Hz(0x48) 72.4Hz(0x46) 75Hz(0x43) 80Hz(0x3f) 90Hz(0x38), Frame Inversion
++	{0xf2, 20, {0x3b, 0x48, 0x03, 0x08, 
++		         0x08, 0x08, 0x08, 0x00,
++			       0x08, 0x08, 0x00, 0x00, 
++			       0x00, 0x00, 0x54, 0x08,
++			       0x08, 0x08, 0x08, 0x00}},
++
++	// PWRCTL 
++	{0xf4, 16, {0x08, 0x00, 0x00, 0x00, 
++		         0x00, 0x00, 0x00, 0x00,
++			       0x3f, 0x79, 0x03, 0x3f, 
++			       0x79, 0x03, 0x00, 0x00}},
++
++	// VCMCTL - VCIR 0x03 -> 0x00
++	{0xf5, 12, {0x00, 0x5d, 0x75, 0x00, 
++		         0x00, 0x00, 0x00, 0x00,
++			       0x04, 0x00, 0x5d, 0x75}},
++			       
++	// {REGFLAG_DELAY, 10, {0}},
++
++  // SRCCTL
++	{0xf6, 8, {0x04, 0x00, 0x08, 0x03, 
++		         0x01, 0x00, 0x01, 0x00}},
++
++  // IFCTL
++	{0xf7, 8,  {0x48, 0x80, 0x10, 0x02,
++		         0x00, 0x00, 0x00, 0x00}},
++
++  // PANELCTL
++	{0xf8, 4,  {0x11, 0x00, 0x00, 0x00}},
++
++
++#if 0 // backlight auto-control
++  // WRDISBV
++	{0x51, 4,  {0xff, 0x00, 0x00, 0x00}},
++
++
++  // WRCTRLD
++	{0x53, 4,  {0x2c, 0x00, 0x00, 0x00}},
++
++
++  // WRCABC
++	{0x55, 4,  {0x03, 0x00, 0x00, 0x00}},
++
++  // WRCABCMB
++	{0x5e, 4,  {0x00, 0x00, 0x00, 0x00}},
++
++  // MIECTL1
++	{0xc0, 4,  {0x80, 0x80, 0x3f, 0x00}},
++
++  // BCMODE
++	{0xc1, 4,  {0x13, 0x00, 0x00, 0x00}},
++#endif
++
++  // GAMMASEL - Red
++	{0xf9, 4,  {0x24, 0x00, 0x00, 0x00}},
++	// PGAMMACTL 
++	{0xfa, 16, {0x0b, 0x0b, 0x0c, 0x1f, 
++		         0x1f, 0x27, 0x2f, 0x14,
++			       0x21, 0x26, 0x32, 0x31, 
++			       0x24, 0x00, 0x00, 0x01}},
++
++  // GAMMASEL - Green
++	{0xf9, 4,  {0x22, 0x00, 0x00, 0x00}},
++	// PGAMMACTL 
++	{0xfa, 16, {0x0b, 0x0b, 0x0e, 0x27, 
++		         0x29, 0x30, 0x33, 0x12,
++			       0x1f, 0x25, 0x31, 0x30, 
++			       0x24, 0x00, 0x00, 0x01}},
++
++  // GAMMASEL - Blue
++	{0xf9, 4,  {0x21, 0x00, 0x00, 0x00}},
++	// PGAMMACTL 
++	{0xfa, 16, {0x0b, 0x0b, 0x1a, 0x3a, 
++		         0x3f, 0x3f, 0x3f, 0x08,
++			       0x19, 0x21, 0x2c, 0x2a, 
++			       0x1a, 0x00, 0x00, 0x01}},
++
++	// COLMOD 
++	{0x3a,  4, {0x55, 0x00, 0x00, 0x00}},
++
++	// MADCTL 
++	{0x36,  4, {0x00, 0x00, 0x00, 0x00}},
++
++	// TEON 
++	{0x35,  4, {0x00, 0x00, 0x00, 0x00}},
++
++
++	// CASET
++	{0x2a,  4, {0x00, 0x00, 0x01, 0x3f}},
++
++	// PASET
++	{0x2b,  4, {0x00, 0x00, 0x01, 0xdf}},
++		
++	{REGFLAG_END_OF_TABLE, 0x00, {0}}
++};
++/* LGE_CHANGE_E [james.jang@lge.com] 2010-11-09 */
++
++void hitachi_display_table(struct display_table *table, unsigned int count)
+ {
+ 	unsigned int i;
+ 
+@@ -500,41 +613,23 @@ static int mddi_hitachi_lcd_on(struct platform_device *pdev)
+ {
+ 	EPRINTK("%s: started.\n", __func__);
+ 
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC) || defined(CONFIG_MACH_MSM7X27_THUNDERA)
+ 	if (system_state == SYSTEM_BOOTING && mddi_hitachi_pdata->initialized) {
+ 		is_lcd_on = TRUE;
+ 		return 0;
+ 	}
+-#endif
+ 	// LCD HW Reset
+ 	mddi_hitachi_lcd_panel_poweron();
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG)
+ 	if (lge_bd_rev <= LGE_REV_E) {
+ 		EPRINTK("ThunderG ==> lge_bd_rev = %d : 1st LCD initial\n", lge_bd_rev);
+-		display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-		display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+ 	} else {
+ 		EPRINTK("ThunderG ==> lge_bd_rev = %d : 3rd LCD initial\n", lge_bd_rev);
+-		display_table(mddi_hitachi_initialize_3rd_p500, sizeof(mddi_hitachi_initialize_3rd_p500)/sizeof(struct display_table));
+-		display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
+-	}
+-#elif defined(CONFIG_MACH_MSM7X27_THUNDERA)
+-	display_table(mddi_hitachi_initialize_1st, 
+-			sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-	display_table(mddi_hitachi_display_on_1st,
+-			sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+-#else
+-	if (lge_bd_rev <= LGE_REV_D) {
+-		EPRINTK("ThunderC ==> lge_bd_rev = %d : 1st LCD initial\n", lge_bd_rev);
+-		display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-		display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+-	} else {
+-		EPRINTK("ThunderC ==> lge_bd_rev = %d : 3rd LCD initial\n", lge_bd_rev);
+-		display_table(mddi_hitachi_initialize_3rd_vs660, sizeof(mddi_hitachi_initialize_3rd_vs660)/sizeof(struct display_table));
+-		display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_initialize_3rd_p500, sizeof(mddi_hitachi_initialize_3rd_p500)/sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
+ 	}
+-#endif
+ 	is_lcd_on = TRUE;
++
+ 	return 0;
+ }
+ 
+@@ -542,48 +637,28 @@ static int mddi_hitachi_lcd_store_on(void)
+ {
+ 	EPRINTK("%s: started.\n", __func__);
+ 
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC) || defined(CONFIG_MACH_MSM7X27_THUNDERA)
+ 	if (system_state == SYSTEM_BOOTING && mddi_hitachi_pdata->initialized) {
+ 		is_lcd_on = TRUE;
+ 		return 0;
+ 	}
+-#endif
+ 	// LCD HW Reset
+ 	mddi_hitachi_lcd_panel_store_poweron();
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG)
+ 	if (lge_bd_rev <= LGE_REV_E) {
+-		display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-		mdelay(200);
+-		display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+-	} else {
+-		display_table(mddi_hitachi_initialize_3rd_p500, sizeof(mddi_hitachi_initialize_3rd_p500)/sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+ 		mdelay(200);
+-		display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
+-	}
+-#elif defined(CONFIG_MACH_MSM7X27_THUNDERA)
+-	display_table(mddi_hitachi_initialize_1st,
+-			sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-	mdelay(200);
+-	display_table(mddi_hitachi_display_on_1st,
+-			sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+-#else
+-	if (lge_bd_rev <= LGE_REV_D) {
+-		display_table(mddi_hitachi_initialize_1st, sizeof(mddi_hitachi_initialize_1st)/sizeof(struct display_table));
+-		mdelay(200);
+-		display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_display_on_1st, sizeof(mddi_hitachi_display_on_1st) / sizeof(struct display_table));
+ 	} else {
+-		display_table(mddi_hitachi_initialize_3rd_vs660, sizeof(mddi_hitachi_initialize_3rd_vs660)/sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_initialize_3rd_p500, sizeof(mddi_hitachi_initialize_3rd_p500)/sizeof(struct display_table));
+ 		mdelay(200);
+-		display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
++		hitachi_display_table(mddi_hitachi_display_on_3rd, sizeof(mddi_hitachi_display_on_3rd) / sizeof(struct display_table));
+ 	}
+-#endif
+ 	is_lcd_on = TRUE;
+ 	return 0;
+ }
+ 
+ static int mddi_hitachi_lcd_off(struct platform_device *pdev)
+ {
+-	display_table(mddi_hitachi_sleep_mode_on_data, sizeof(mddi_hitachi_sleep_mode_on_data)/sizeof(struct display_table));
++	hitachi_display_table(mddi_hitachi_sleep_mode_on_data, sizeof(mddi_hitachi_sleep_mode_on_data)/sizeof(struct display_table));
+ 	mddi_hitachi_lcd_panel_poweroff();
+ 	is_lcd_on = FALSE;
+ 	return 0;
+@@ -614,17 +689,17 @@ ssize_t mddi_hitachi_lcd_store_onoff(struct device *dev, struct device_attribute
+ 		is_lcd_on = FALSE;
+ 	}
+ 
+-	//return 0;
+-	return count;
++	return 0;
+ }
+ 
+ int mddi_hitachi_position(void)
+ {
+-	display_table(mddi_hitachi_position_table, ARRAY_SIZE(mddi_hitachi_position_table));
++	hitachi_display_table(mddi_hitachi_position_table, ARRAY_SIZE(mddi_hitachi_position_table));
+ 	return 0;
+ }
+ EXPORT_SYMBOL(mddi_hitachi_position);
+ 
++/* LGE_CHANGE [james.jang@lge.com] 2010-08-28, probe LCD */
+ DEVICE_ATTR(lcd_onoff, 0666, mddi_hitachi_lcd_show_onoff, mddi_hitachi_lcd_store_onoff);
+ 
+ struct msm_fb_panel_data hitachi_panel_data0 = {
+@@ -654,6 +729,7 @@ static int __init mddi_hitachi_lcd_probe(struct platform_device *pdev)
+ 
+ 	msm_fb_add_device(pdev);
+ 
++/* LGE_CHANGE [james.jang@lge.com] 2010-08-28, probe LCD */
+ 	ret = device_create_file(&pdev->dev, &dev_attr_lcd_onoff);
+ 
+ 	return 0;
+@@ -678,6 +754,7 @@ static int mddi_hitachi_lcd_init(void)
+ 	/* TODO: Check client id */
+ 
+ #endif
++
+ 	ret = platform_driver_register(&this_driver);
+ 	if (!ret) {
+ 		pinfo = &hitachi_panel_data0.panel_info;
+@@ -734,11 +811,7 @@ static int mddi_hitachi_lcd_init(void)
+ 
+ static void mddi_hitachi_lcd_panel_poweron(void)
+ {
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC) || defined(CONFIG_MACH_MSM7X27_THUNDERA)
+ 	struct msm_panel_hitachi_pdata *pdata = mddi_hitachi_pdata;
+-#else
+-	struct msm_panel_common_pdata *pdata = mddi_hitachi_pdata;
+-#endif
+ 
+ 	EPRINTK("%s: started.\n", __func__);
+ 
+@@ -746,22 +819,18 @@ static void mddi_hitachi_lcd_panel_poweron(void)
+ 	fb_height = 480;
+ 
+ 	if(pdata && pdata->gpio) {
+-	//	gpio_set_value(pdata->gpio, 1);
+-	//	mdelay(10);
+-		gpio_set_value(pdata->gpio, 0);
++		gpio_set_value(pdata->gpio, 1);
+ 		mdelay(10);
++		gpio_set_value(pdata->gpio, 0);
++		mdelay(15);
+ 		gpio_set_value(pdata->gpio, 1);
+-		mdelay(2);
++		mdelay(30);
+ 	}
+ }
+ 
+ static void mddi_hitachi_lcd_panel_store_poweron(void)
+ {
+-#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC) || defined(CONFIG_MACH_MSM7X27_THUNDERA)
+ 	struct msm_panel_hitachi_pdata *pdata = mddi_hitachi_pdata;
+-#else
+-	struct msm_panel_common_pdata *pdata = mddi_hitachi_pdata;
+-#endif
+ 
+ 	EPRINTK("%s: started.\n", __func__);
+ 
+diff --git a/drivers/video/msm/mddi_novatek_hvga.c b/drivers/video/msm/mddi_novatek_hvga.c
+old mode 100644
+new mode 100755
+index 53b9cde..da315f5
+--- a/drivers/video/msm/mddi_novatek_hvga.c
++++ b/drivers/video/msm/mddi_novatek_hvga.c
+@@ -38,6 +38,15 @@
+ 
+ #define PANEL_DEBUG 0
+ 
++/* set gamma */
++//#define GAMMA_CURRENT
++//#define GAMMA_1_DOT_8
++//#define GAMMA_1_DOT_9
++//#define GAMMA_2_DOT_0
++//#define GAMMA_2_DOT_1
++#define GAMMA_2_DOT_2
++
++
+ /* LGE_CHANGE [dojip.kim@lge.com] 2010-04-26, 
+  * tentative command for 4/20,21 shipping sample 
+  */
+@@ -49,9 +58,6 @@
+ #define INTMSK		LCD_CONTROL_BLOCK_BASE|(0x1c)
+ #define VPOS		LCD_CONTROL_BLOCK_BASE|(0xc0)
+ 
+-static uint32 mddi_novatek_curr_vpos;
+-static boolean mddi_novatek_monitor_refresh_value = FALSE;
+-static boolean mddi_novatek_report_refresh_measurements = FALSE;
+ static boolean is_lcd_on = -1;
+ 
+ /* The comment from AMSS codes:
+@@ -61,13 +67,16 @@
+  * XXX: TODO: change this values for INNOTEK PANEL */
+ static uint32 mddi_novatek_rows_per_second = 31250;
+ static uint32 mddi_novatek_rows_per_refresh = 480;
+-static uint32 mddi_novatek_usecs_per_refresh = 15360; /* rows_per_refresh / rows_per_second */
+ extern boolean mddi_vsync_detect_enabled;
+ 
+ static msm_fb_vsync_handler_type mddi_novatek_vsync_handler = NULL;
+ static void *mddi_novatek_vsync_handler_arg;
+ static uint16 mddi_novatek_vsync_attempts;
+ 
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++extern int g_mddi_lcd_probe;
++#endif
++
+ /* LGE_CHANGE [dojip.kim@lge.com] 2010-05-11, from mddi_hitachi_hvga.c */
+ /* LGE_CHANGE
+  * Define new structure named 'msm_panel_hitachi_pdata' 
+@@ -114,16 +123,18 @@ struct display_table {
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+ 
++#if 0
+ static struct display_table mddi_novatek_display_on[] = {
+ 	// Display on sequence
+-	{0x1100, 1, {0x0000}}, // sleep out
+-	{REGFLAG_DELAY, 150, {}},
++	//{0x1100, 1, {0x0000}}, // sleep out
++	//{REGFLAG_DELAY, 150, {}},
+ 	{0x2c00, 1, {0x0000}},
+ 	{0x3800, 1, {0x0000}}, // Set Idle Mode Off
+ 	{0x2900, 1, {0x0000}}, // Display On
+ 	{0x2c00, 1, {0x0000}},
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
++#endif
+ 
+ #if 0
+ static struct display_table2 mddi_novatek_img[] = {
+@@ -134,6 +145,7 @@ struct display_table {
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+ #endif
++#if 0
+ static struct display_table mddi_novatek_display_off[] = {
+ 	// Display off sequence
+ 	{0x3900, 1, {0x0000}}, // Set Idle mode On
+@@ -143,6 +155,7 @@ struct display_table {
+ 	{REGFLAG_DELAY, 100, {}},
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
++#endif
+ static struct display_table mddi_novatek_sleep_mode_on_data[] = {
+ 	// Display off sequence
+ 	{0x3900, 1, {0x0000}}, // Set Idle mode On
+@@ -156,10 +169,8 @@ struct display_table {
+ static struct display_table mddi_novatek_initialize[] = {
+ 	// Display on sequence
+ 	{0x3900, 1, {0x0000}}, // Set Idle Mode on
+-#if defined(USE_TENTATIVE_COMMAND)
+ 	{0x1100, 1, {0x0000}}, // sleep out
+-#endif
+-	{REGFLAG_DELAY, 100, {}},
++	{REGFLAG_DELAY, 130, {}}, // change 100->130 for stability
+ 	{0xF300, 1, {0x00AA}}, // unlock cmd2
+ 	{0xF280, 1, {0x0002}}, // check cmd status
+ 	{0x0280, 1, {0x0011}}, // power ctrl
+@@ -201,12 +212,16 @@ struct display_table {
+ 	{0x1B80, 1, {0x0050}}, // Set VCOMMH=3.5V
+ 	{0x1C80, 1, {0x0080}}, // VCOM Control
+ 	{0x9480, 1, {0x0017}}, // Set LTPS timing : 23 clks
+-	{0x9580, 1, {0x0021}}, // Set LTPS timing : 33 clks
++  /* LGE_CHANGE [james.jang@lge.com] 2010-07-15, 33 -> 31 CLKS */
++	//{0x9580, 1, {0x0021}}, // Set LTPS timing : 33 clks
++	{0x9580, 1, {0x0017}}, // Set LTPS timing : 33 clks
+ 	{0x9680, 1, {0x0005}}, // Set LTPS timing : 5 clks
+ 	{0x9780, 1, {0x000C}}, // Set LTPS timing : 12 clks
+ 	{0x9880, 1, {0x0072}}, // Set LTPS timing : 114 clks
+ 	{0x9980, 1, {0x0012}}, // Set LTPS timing : 18 clks
+-	{0x9A80, 1, {0x0088}}, // Set LTPS timing : 136 clks
++	/* LGE_CHANGE [james.jang@lge.com] 2010-07-15 */
++	//{0x9A80, 1, {0x0088}}, // Set LTPS timing : 136 clks
++	{0x9A80, 1, {0x0084}}, // Set LTPS timing : 132 clks
+ 	{0x9B80, 1, {0x0001}}, // Set LTPS timing : 1 clks
+ 	{0x9C80, 1, {0x0005}}, // Set LTPS timing : 5 clks
+ 	{0x9D80, 1, {0x0016}}, // Set LTPS timing : 22 clks
+@@ -215,7 +230,8 @@ struct display_table {
+ 	{0xA380, 1, {0x00F8}}, // Set LTPS timing
+ 	{0xA480, 1, {0x003F}}, // Set LTPS timing
+ 	{0xA680, 1, {0x0008}}, // Set LTPS timing
+-	//{0x3600, 1, {0x0008}}, // Set RGB
++	//{0x3600, 1, {0x0008}}, // Set RGB	
++	#if defined(GAMMA_CURRENT) /* LGE_CHANGE [james.jang@lge.com] 2010-07-15, Gamma setting */
+ 	{0x2880, 1, {0x0009}}, // Set Gamma R
+ 	{0x2980, 1, {0x001E}}, // Set Gamma R
+ 	{0x2A80, 1, {0x0045}}, // Set Gamma R
+@@ -233,7 +249,7 @@ struct display_table {
+ 	{0x3680, 1, {0x0078}}, // Set Gamma R
+ 	{0x3780, 1, {0x0088}}, // Set Gamma R
+ 	{0x3880, 1, {0x0025}}, // Set Gamma R
+-	{0x3890, 1, {0x0053}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
+ 	{0x3A80, 1, {0x0009}}, // Set Gamma R
+ 	{0x3B80, 1, {0x0037}}, // Set Gamma R
+ 	{0x3C80, 1, {0x0056}}, // Set Gamma R
+@@ -324,25 +340,568 @@ struct display_table {
+ 	{0x9180, 1, {0x009B}},
+ 	{0x9280, 1, {0x0048}},
+ 	{0x9380, 1, {0x0062}},
++#elif defined(GAMMA_1_DOT_8)
++	{0x2880, 1, {0x0009}}, // Set Gamma R
++	{0x2980, 1, {0x001D}}, // Set Gamma R
++	{0x2A80, 1, {0x0041}}, // Set Gamma R
++	{0x2B80, 1, {0x005A}}, // Set Gamma R
++	{0x2C80, 1, {0x000D}}, // Set Gamma R
++	{0x2D80, 1, {0x002F}}, // Set Gamma R
++	{0x2E80, 1, {0x0060}}, // Set Gamma R
++	{0x2F80, 1, {0x0056}}, // Set Gamma R
++	{0x3080, 1, {0x001F}}, // Set Gamma R
++	{0x3180, 1, {0x0025}}, // Set Gamma R
++	{0x3280, 1, {0x009E}}, // Set Gamma R
++	{0x3380, 1, {0x001E}}, // Set Gamma R
++	{0x3480, 1, {0x0048}}, // Set Gamma R
++	{0x3580, 1, {0x0068}}, // Set Gamma R
++	{0x3680, 1, {0x0076}}, // Set Gamma R
++	{0x3780, 1, {0x0089}}, // Set Gamma R
++	{0x3880, 1, {0x0026}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
++	{0x3A80, 1, {0x000A}}, // Set Gamma R
++	{0x3B80, 1, {0x003C}}, // Set Gamma R
++	{0x3C80, 1, {0x0055}}, // Set Gamma R
++	{0x3D80, 1, {0x006A}}, // Set Gamma R
++	{0x3E80, 1, {0x0017}}, // Set Gamma R
++	{0x3F80, 1, {0x0036}}, // Set Gamma R
++	{0x4080, 1, {0x0060}}, // Set Gamma R
++	{0x4180, 1, {0x0049}}, // Set Gamma R
++	{0x4280, 1, {0x0017}}, // Set Gamma R
++	{0x4380, 1, {0x0021}}, // Set Gamma R
++	{0x4480, 1, {0x0092}}, // Set Gamma R
++	{0x4580, 1, {0x001E}}, // Set Gamma R
++	{0x4680, 1, {0x0051}}, // Set Gamma R
++	{0x4780, 1, {0x0071}}, // Set Gamma R
++	{0x4880, 1, {0x008E}}, // Set Gamma R
++	{0x4980, 1, {0x00A1}}, // Set Gamma R
++	{0x4A80, 1, {0x004B}}, // Set Gamma R
++	{0x4B80, 1, {0x0063}}, // Set Gamma R
++	{0x4C80, 1, {0x003D}}, // Set Gamma G
++	{0x4D80, 1, {0x004D}}, // Set Gamma G
++	{0x4E80, 1, {0x006F}}, // Set Gamma G
++	{0x4F80, 1, {0x0074}}, // Set Gamma G
++	{0x5080, 1, {0x0009}}, // Set Gamma G
++	{0x5180, 1, {0x0029}}, // Set Gamma G
++	{0x5280, 1, {0x005B}}, // Set Gamma G
++	{0x5380, 1, {0x005D}},
++	{0x5480, 1, {0x001E}},
++	{0x5580, 1, {0x0025}},
++	{0x5680, 1, {0x009E}},
++	{0x5780, 1, {0x001D}},
++	{0x5880, 1, {0x0048}},
++	{0x5980, 1, {0x0066}},
++	{0x5A80, 1, {0x0073}},
++	{0x5B80, 1, {0x008B}},
++	{0x5C80, 1, {0x0027}},
++	{0x5D80, 1, {0x0053}},
++	{0x5E80, 1, {0x0009}},
++	{0x5F80, 1, {0x0033}},
++	{0x6080, 1, {0x0053}},
++	{0x6180, 1, {0x006C}},
++	{0x6280, 1, {0x0016}},
++	{0x6380, 1, {0x003A}},
++	{0x6480, 1, {0x0061}},
++	{0x6580, 1, {0x0048}},
++	{0x6680, 1, {0x001A}},
++	{0x6780, 1, {0x0022}},
++	{0x6880, 1, {0x008A}},
++	{0x6980, 1, {0x0024}},
++	{0x6A80, 1, {0x0055}},
++	{0x6B80, 1, {0x0072}},
++	{0x6C80, 1, {0x0078}},
++	{0x6D80, 1, {0x007B}},
++	{0x6E80, 1, {0x001C}},
++	{0x6F80, 1, {0x002F}},
++	{0x7080, 1, {0x0009}}, // Set Gamma B
++	{0x7180, 1, {0x0020}},
++	{0x7280, 1, {0x0050}},
++	{0x7380, 1, {0x0067}},
++	{0x7480, 1, {0x0015}},
++	{0x7580, 1, {0x003F}},
++	{0x7680, 1, {0x0068}},
++	{0x7780, 1, {0x006C}},
++	{0x7880, 1, {0x001F}},
++	{0x7980, 1, {0x0025}},
++	{0x7A80, 1, {0x009F}},
++	{0x7B80, 1, {0x001E}},
++	{0x7C80, 1, {0x004E}},
++	{0x7D80, 1, {0x0068}},
++	{0x7E80, 1, {0x006D}},
++	{0x7F80, 1, {0x0084}},
++	{0x8080, 1, {0x0027}},
++	{0x8180, 1, {0x0053}},
++	{0x8280, 1, {0x0009}},
++	{0x8380, 1, {0x0034}},
++	{0x8480, 1, {0x0058}},
++	{0x8580, 1, {0x0073}},
++	{0x8680, 1, {0x0016}},
++	{0x8780, 1, {0x0033}},
++	{0x8880, 1, {0x0062}},
++	{0x8980, 1, {0x0046}},
++	{0x8A80, 1, {0x001B}},
++	{0x8B80, 1, {0x0021}},
++	{0x8C80, 1, {0x007C}},
++	{0x8D80, 1, {0x0017}},
++	{0x8E80, 1, {0x003E}},
++	{0x8F80, 1, {0x0061}},
++	{0x9080, 1, {0x0087}},
++	{0x9180, 1, {0x009A}},
++	{0x9280, 1, {0x0048}},
++	{0x9380, 1, {0x0062}},
++#elif defined(GAMMA_1_DOT_9)
++	{0x2880, 1, {0x0009}}, // Set Gamma R
++	{0x2980, 1, {0x001E}}, // Set Gamma R
++	{0x2A80, 1, {0x0045}}, // Set Gamma R
++	{0x2B80, 1, {0x005D}}, // Set Gamma R
++	{0x2C80, 1, {0x000C}}, // Set Gamma R
++	{0x2D80, 1, {0x002E}}, // Set Gamma R
++	{0x2E80, 1, {0x005F}}, // Set Gamma R
++	{0x2F80, 1, {0x005A}}, // Set Gamma R
++	{0x3080, 1, {0x001D}}, // Set Gamma R
++	{0x3180, 1, {0x0026}}, // Set Gamma R
++	{0x3280, 1, {0x00A1}}, // Set Gamma R
++	{0x3380, 1, {0x001E}}, // Set Gamma R
++	{0x3480, 1, {0x0048}}, // Set Gamma R
++	{0x3580, 1, {0x0067}}, // Set Gamma R
++	{0x3680, 1, {0x0077}}, // Set Gamma R
++	{0x3780, 1, {0x0088}}, // Set Gamma R
++	{0x3880, 1, {0x0025}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
++	{0x3A80, 1, {0x0009}}, // Set Gamma R
++	{0x3B80, 1, {0x0037}}, // Set Gamma R
++	{0x3C80, 1, {0x0056}}, // Set Gamma R
++	{0x3D80, 1, {0x006A}}, // Set Gamma R
++	{0x3E80, 1, {0x0017}}, // Set Gamma R
++	{0x3F80, 1, {0x0037}}, // Set Gamma R
++	{0x4080, 1, {0x0061}}, // Set Gamma R
++	{0x4180, 1, {0x0044}}, // Set Gamma R
++	{0x4280, 1, {0x001A}}, // Set Gamma R
++	{0x4380, 1, {0x0023}}, // Set Gamma R
++	{0x4480, 1, {0x008D}}, // Set Gamma R
++	{0x4580, 1, {0x0022}}, // Set Gamma R
++	{0x4680, 1, {0x0051}}, // Set Gamma R
++	{0x4780, 1, {0x0071}}, // Set Gamma R
++	{0x4880, 1, {0x0090}}, // Set Gamma R
++	{0x4980, 1, {0x00A6}}, // Set Gamma R
++	{0x4A80, 1, {0x004D}}, // Set Gamma R
++	{0x4B80, 1, {0x0062}}, // Set Gamma R
++	{0x4C80, 1, {0x003D}}, // Set Gamma G
++	{0x4D80, 1, {0x0050}}, // Set Gamma G
++	{0x4E80, 1, {0x006E}}, // Set Gamma G
++	{0x4F80, 1, {0x0078}}, // Set Gamma G
++	{0x5080, 1, {0x0008}}, // Set Gamma G
++	{0x5180, 1, {0x0028}}, // Set Gamma G
++	{0x5280, 1, {0x005A}}, // Set Gamma G
++	{0x5380, 1, {0x0061}},
++	{0x5480, 1, {0x001C}},
++	{0x5580, 1, {0x0026}},
++	{0x5680, 1, {0x00A1}},
++	{0x5780, 1, {0x001D}},
++	{0x5880, 1, {0x0048}},
++	{0x5980, 1, {0x0065}},
++	{0x5A80, 1, {0x0074}},
++	{0x5B80, 1, {0x008A}},
++	{0x5C80, 1, {0x0026}},
++	{0x5D80, 1, {0x0053}},
++	{0x5E80, 1, {0x0009}},
++	{0x5F80, 1, {0x0036}},
++	{0x6080, 1, {0x0053}},
++	{0x6180, 1, {0x006B}},
++	{0x6280, 1, {0x001A}},
++	{0x6380, 1, {0x0037}},
++	{0x6480, 1, {0x0061}},
++	{0x6580, 1, {0x0045}},
++	{0x6680, 1, {0x0018}},
++	{0x6780, 1, {0x0022}},
++	{0x6880, 1, {0x0087}},
++	{0x6980, 1, {0x0020}},
++	{0x6A80, 1, {0x004A}},
++	{0x6B80, 1, {0x0067}},
++	{0x6C80, 1, {0x0087}},
++	{0x6D80, 1, {0x0085}},
++	{0x6E80, 1, {0x001D}},
++	{0x6F80, 1, {0x002D}},
++	{0x7080, 1, {0x0009}}, // Set Gamma B
++	{0x7180, 1, {0x0023}},
++	{0x7280, 1, {0x004F}},
++	{0x7380, 1, {0x006B}},
++	{0x7480, 1, {0x0014}},
++	{0x7580, 1, {0x003E}},
++	{0x7680, 1, {0x0067}},
++	{0x7780, 1, {0x0070}},
++	{0x7880, 1, {0x001D}},
++	{0x7980, 1, {0x0026}},
++	{0x7A80, 1, {0x00A2}},
++	{0x7B80, 1, {0x001E}},
++	{0x7C80, 1, {0x004E}},
++	{0x7D80, 1, {0x0067}},
++	{0x7E80, 1, {0x006E}},
++	{0x7F80, 1, {0x0083}},
++	{0x8080, 1, {0x0026}},
++	{0x8180, 1, {0x0053}},
++	{0x8280, 1, {0x0009}},
++	{0x8380, 1, {0x0036}},
++	{0x8480, 1, {0x005A}},
++	{0x8580, 1, {0x0073}},
++	{0x8680, 1, {0x0018}},
++	{0x8780, 1, {0x0031}},
++	{0x8880, 1, {0x0061}},
++	{0x8980, 1, {0x0044}},
++	{0x8A80, 1, {0x0019}},
++	{0x8B80, 1, {0x0023}},
++	{0x8C80, 1, {0x0077}},
++	{0x8D80, 1, {0x0018}},
++	{0x8E80, 1, {0x003D}},
++	{0x8F80, 1, {0x0064}},
++	{0x9080, 1, {0x008A}},
++	{0x9180, 1, {0x009F}},
++	{0x9280, 1, {0x0048}},
++	{0x9380, 1, {0x0062}},
++#elif defined(GAMMA_2_DOT_0)
++	{0x2880, 1, {0x0009}}, // Set Gamma R
++	{0x2980, 1, {0x001E}}, // Set Gamma R
++	{0x2A80, 1, {0x0045}}, // Set Gamma R
++	{0x2B80, 1, {0x005D}}, // Set Gamma R
++	{0x2C80, 1, {0x000D}}, // Set Gamma R
++	{0x2D80, 1, {0x002E}}, // Set Gamma R
++	{0x2E80, 1, {0x005F}}, // Set Gamma R
++	{0x2F80, 1, {0x005A}}, // Set Gamma R
++	{0x3080, 1, {0x001C}}, // Set Gamma R
++	{0x3180, 1, {0x0026}}, // Set Gamma R
++	{0x3280, 1, {0x00A1}}, // Set Gamma R
++	{0x3380, 1, {0x001E}}, // Set Gamma R
++	{0x3480, 1, {0x0048}}, // Set Gamma R
++	{0x3580, 1, {0x0067}}, // Set Gamma R
++	{0x3680, 1, {0x0077}}, // Set Gamma R
++	{0x3780, 1, {0x0088}}, // Set Gamma R
++	{0x3880, 1, {0x0025}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
++	{0x3A80, 1, {0x0009}}, // Set Gamma R
++	{0x3B80, 1, {0x0037}}, // Set Gamma R
++	{0x3C80, 1, {0x0056}}, // Set Gamma R
++	{0x3D80, 1, {0x006A}}, // Set Gamma R
++	{0x3E80, 1, {0x0018}}, // Set Gamma R
++	{0x3F80, 1, {0x0037}}, // Set Gamma R
++	{0x4080, 1, {0x0061}}, // Set Gamma R
++	{0x4180, 1, {0x0044}}, // Set Gamma R
++	{0x4280, 1, {0x001A}}, // Set Gamma R
++	{0x4380, 1, {0x0024}}, // Set Gamma R
++	{0x4480, 1, {0x008D}}, // Set Gamma R
++	{0x4580, 1, {0x0022}}, // Set Gamma R
++	{0x4680, 1, {0x0051}}, // Set Gamma R
++	{0x4780, 1, {0x0072}}, // Set Gamma R
++	{0x4880, 1, {0x0090}}, // Set Gamma R
++	{0x4980, 1, {0x00A6}}, // Set Gamma R
++	{0x4A80, 1, {0x004D}}, // Set Gamma R
++	{0x4B80, 1, {0x0062}}, // Set Gamma R
++	{0x4C80, 1, {0x003D}}, // Set Gamma G
++	{0x4D80, 1, {0x0050}}, // Set Gamma G
++	{0x4E80, 1, {0x006E}}, // Set Gamma G
++	{0x4F80, 1, {0x0078}}, // Set Gamma G
++	{0x5080, 1, {0x0009}}, // Set Gamma G
++	{0x5180, 1, {0x0028}}, // Set Gamma G
++	{0x5280, 1, {0x005A}}, // Set Gamma G
++	{0x5380, 1, {0x0061}},
++	{0x5480, 1, {0x001B}},
++	{0x5580, 1, {0x0026}},
++	{0x5680, 1, {0x00A1}},
++	{0x5780, 1, {0x001D}},
++	{0x5880, 1, {0x0048}},
++	{0x5980, 1, {0x0065}},
++	{0x5A80, 1, {0x0074}},
++	{0x5B80, 1, {0x008A}},
++	{0x5C80, 1, {0x0026}},
++	{0x5D80, 1, {0x0053}},
++	{0x5E80, 1, {0x0009}},
++	{0x5F80, 1, {0x0036}},
++	{0x6080, 1, {0x0053}},
++	{0x6180, 1, {0x006B}},
++	{0x6280, 1, {0x001A}},
++	{0x6380, 1, {0x0037}},
++	{0x6480, 1, {0x0062}},
++	{0x6580, 1, {0x0045}},
++	{0x6680, 1, {0x0019}},
++	{0x6780, 1, {0x0023}},
++	{0x6880, 1, {0x0087}},
++	{0x6980, 1, {0x0021}},
++	{0x6A80, 1, {0x004B}},
++	{0x6B80, 1, {0x0067}},
++	{0x6C80, 1, {0x0087}},
++	{0x6D80, 1, {0x0085}},
++	{0x6E80, 1, {0x001D}},
++	{0x6F80, 1, {0x002D}},
++	{0x7080, 1, {0x0009}}, // Set Gamma B
++	{0x7180, 1, {0x0023}},
++	{0x7280, 1, {0x004F}},
++	{0x7380, 1, {0x006B}},
++	{0x7480, 1, {0x0015}},
++	{0x7580, 1, {0x003E}},
++	{0x7680, 1, {0x0067}},
++	{0x7780, 1, {0x0070}},
++	{0x7880, 1, {0x001C}},
++	{0x7980, 1, {0x0026}},
++	{0x7A80, 1, {0x00A2}},
++	{0x7B80, 1, {0x001E}},
++	{0x7C80, 1, {0x004E}},
++	{0x7D80, 1, {0x0067}},
++	{0x7E80, 1, {0x006E}},
++	{0x7F80, 1, {0x0083}},
++	{0x8080, 1, {0x0026}},
++	{0x8180, 1, {0x0053}},
++	{0x8280, 1, {0x0009}},
++	{0x8380, 1, {0x0036}},
++	{0x8480, 1, {0x005A}},
++	{0x8580, 1, {0x0073}},
++	{0x8680, 1, {0x0018}},
++	{0x8780, 1, {0x0031}},
++	{0x8880, 1, {0x0061}},
++	{0x8980, 1, {0x0044}},
++	{0x8A80, 1, {0x0019}},
++	{0x8B80, 1, {0x0023}},
++	{0x8C80, 1, {0x0077}},
++	{0x8D80, 1, {0x0018}},
++	{0x8E80, 1, {0x003D}},
++	{0x8F80, 1, {0x0065}},
++	{0x9080, 1, {0x008A}},
++	{0x9180, 1, {0x009F}},
++	{0x9280, 1, {0x0048}},
++	{0x9380, 1, {0x0062}},
++#elif defined(GAMMA_2_DOT_1)
++	{0x2880, 1, {0x0009}}, // Set Gamma R
++	{0x2980, 1, {0x001E}}, // Set Gamma R
++	{0x2A80, 1, {0x0045}}, // Set Gamma R
++	{0x2B80, 1, {0x0063}}, // Set Gamma R
++	{0x2C80, 1, {0x000D}}, // Set Gamma R
++	{0x2D80, 1, {0x002E}}, // Set Gamma R
++	{0x2E80, 1, {0x0060}}, // Set Gamma R
++	{0x2F80, 1, {0x0061}}, // Set Gamma R
++	{0x3080, 1, {0x001D}}, // Set Gamma R
++	{0x3180, 1, {0x0026}}, // Set Gamma R
++	{0x3280, 1, {0x00A4}}, // Set Gamma R
++	{0x3380, 1, {0x001D}}, // Set Gamma R
++	{0x3480, 1, {0x0048}}, // Set Gamma R
++	{0x3580, 1, {0x0067}}, // Set Gamma R
++	{0x3680, 1, {0x0078}}, // Set Gamma R
++	{0x3780, 1, {0x0088}}, // Set Gamma R
++	{0x3880, 1, {0x0025}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
++	{0x3A80, 1, {0x0009}}, // Set Gamma R
++	{0x3B80, 1, {0x0037}}, // Set Gamma R
++	{0x3C80, 1, {0x0056}}, // Set Gamma R
++	{0x3D80, 1, {0x0068}}, // Set Gamma R
++	{0x3E80, 1, {0x0018}}, // Set Gamma R
++	{0x3F80, 1, {0x0037}}, // Set Gamma R
++	{0x4080, 1, {0x0063}}, // Set Gamma R
++	{0x4180, 1, {0x0041}}, // Set Gamma R
++	{0x4280, 1, {0x0019}}, // Set Gamma R
++	{0x4380, 1, {0x0021}}, // Set Gamma R
++	{0x4480, 1, {0x0087}}, // Set Gamma R
++	{0x4580, 1, {0x0021}}, // Set Gamma R
++	{0x4680, 1, {0x0051}}, // Set Gamma R
++	{0x4780, 1, {0x0072}}, // Set Gamma R
++	{0x4880, 1, {0x0087}}, // Set Gamma R
++	{0x4980, 1, {0x00A6}}, // Set Gamma R
++	{0x4A80, 1, {0x004D}}, // Set Gamma R
++	{0x4B80, 1, {0x0062}}, // Set Gamma R
++	{0x4C80, 1, {0x003D}}, // Set Gamma G
++	{0x4D80, 1, {0x0050}}, // Set Gamma G
++	{0x4E80, 1, {0x006E}}, // Set Gamma G
++	{0x4F80, 1, {0x0079}}, // Set Gamma G
++	{0x5080, 1, {0x0009}}, // Set Gamma G
++	{0x5180, 1, {0x0028}}, // Set Gamma G
++	{0x5280, 1, {0x005B}}, // Set Gamma G
++	{0x5380, 1, {0x0063}},
++	{0x5480, 1, {0x001C}},
++	{0x5580, 1, {0x0026}},
++	{0x5680, 1, {0x00A4}},
++	{0x5780, 1, {0x001C}},
++	{0x5880, 1, {0x0048}},
++	{0x5980, 1, {0x0065}},
++	{0x5A80, 1, {0x0075}},
++	{0x5B80, 1, {0x008A}},
++	{0x5C80, 1, {0x0026}},
++	{0x5D80, 1, {0x0053}},
++	{0x5E80, 1, {0x0009}},
++	{0x5F80, 1, {0x0036}},
++	{0x6080, 1, {0x0053}},
++	{0x6180, 1, {0x006A}},
++	{0x6280, 1, {0x001A}},
++	{0x6380, 1, {0x0037}},
++	{0x6480, 1, {0x0066}},
++	{0x6580, 1, {0x0040}},
++	{0x6680, 1, {0x001B}},
++	{0x6780, 1, {0x0022}},
++	{0x6880, 1, {0x0085}},
++	{0x6980, 1, {0x0025}},
++	{0x6A80, 1, {0x0057}},
++	{0x6B80, 1, {0x0076}},
++	{0x6C80, 1, {0x006F}},
++	{0x6D80, 1, {0x007C}},
++	{0x6E80, 1, {0x001A}},
++	{0x6F80, 1, {0x002D}},
++	{0x7080, 1, {0x0009}}, // Set Gamma B
++	{0x7180, 1, {0x0023}},
++	{0x7280, 1, {0x004F}},
++	{0x7380, 1, {0x0064}},
++	{0x7480, 1, {0x0015}},
++	{0x7580, 1, {0x003E}},
++	{0x7680, 1, {0x0068}},
++	{0x7780, 1, {0x006D}},
++	{0x7880, 1, {0x001D}},
++	{0x7980, 1, {0x0026}},
++	{0x7A80, 1, {0x00A9}},
++	{0x7B80, 1, {0x001D}},
++	{0x7C80, 1, {0x004B}},
++	{0x7D80, 1, {0x0067}},
++	{0x7E80, 1, {0x0074}},
++	{0x7F80, 1, {0x0086}},
++	{0x8080, 1, {0x0028}},
++	{0x8180, 1, {0x0053}},
++	{0x8280, 1, {0x0009}},
++	{0x8380, 1, {0x0034}},
++	{0x8480, 1, {0x0058}},
++	{0x8580, 1, {0x006B}},
++	{0x8680, 1, {0x0018}},
++	{0x8780, 1, {0x0035}},
++	{0x8880, 1, {0x0063}},
++	{0x8980, 1, {0x003C}},
++	{0x8A80, 1, {0x0019}},
++	{0x8B80, 1, {0x0023}},
++	{0x8C80, 1, {0x007A}},
++	{0x8D80, 1, {0x0019}},
++	{0x8E80, 1, {0x0041}},
++	{0x8F80, 1, {0x006A}},
++	{0x9080, 1, {0x0085}},
++	{0x9180, 1, {0x009B}},
++	{0x9280, 1, {0x0048}},
++	{0x9380, 1, {0x0062}},
++#elif defined(GAMMA_2_DOT_2)
++	{0x2880, 1, {0x0009}}, // Set Gamma R
++	{0x2980, 1, {0x001E}}, // Set Gamma R
++	{0x2A80, 1, {0x0045}}, // Set Gamma R
++	{0x2B80, 1, {0x005E}}, // Set Gamma R
++	{0x2C80, 1, {0x000D}}, // Set Gamma R
++	{0x2D80, 1, {0x002E}}, // Set Gamma R
++	{0x2E80, 1, {0x0061}}, // Set Gamma R
++	{0x2F80, 1, {0x005F}}, // Set Gamma R
++	{0x3080, 1, {0x0020}}, // Set Gamma R
++	{0x3180, 1, {0x0026}}, // Set Gamma R
++	{0x3280, 1, {0x00A2}}, // Set Gamma R
++	{0x3380, 1, {0x0022}}, // Set Gamma R
++	{0x3480, 1, {0x004A}}, // Set Gamma R
++	{0x3580, 1, {0x0067}}, // Set Gamma R
++	{0x3680, 1, {0x0073}}, // Set Gamma R
++	{0x3780, 1, {0x0088}}, // Set Gamma R
++	{0x3880, 1, {0x0025}}, // Set Gamma R
++	{0x3980, 1, {0x0053}}, // Set Gamma R
++	{0x3A80, 1, {0x0009}}, // Set Gamma R
++	{0x3B80, 1, {0x0037}}, // Set Gamma R
++	{0x3C80, 1, {0x0056}}, // Set Gamma R
++	{0x3D80, 1, {0x006C}}, // Set Gamma R
++	{0x3E80, 1, {0x0018}}, // Set Gamma R
++	{0x3F80, 1, {0x0037}}, // Set Gamma R
++	{0x4080, 1, {0x0060}}, // Set Gamma R
++	{0x4180, 1, {0x0042}}, // Set Gamma R
++	{0x4280, 1, {0x001B}}, // Set Gamma R
++	{0x4380, 1, {0x0021}}, // Set Gamma R
++	{0x4480, 1, {0x0089}}, // Set Gamma R
++	{0x4580, 1, {0x001E}}, // Set Gamma R
++	{0x4680, 1, {0x0051}}, // Set Gamma R
++	{0x4780, 1, {0x0072}}, // Set Gamma R
++	{0x4880, 1, {0x008D}}, // Set Gamma R
++	{0x4980, 1, {0x00A6}}, // Set Gamma R
++	{0x4A80, 1, {0x004D}}, // Set Gamma R
++	{0x4B80, 1, {0x0062}}, // Set Gamma R
++	{0x4C80, 1, {0x003D}}, // Set Gamma G
++	{0x4D80, 1, {0x0050}}, // Set Gamma G
++	{0x4E80, 1, {0x006E}}, // Set Gamma G
++	{0x4F80, 1, {0x0079}}, // Set Gamma G
++	{0x5080, 1, {0x0009}}, // Set Gamma G
++	{0x5180, 1, {0x0028}}, // Set Gamma G
++	{0x5280, 1, {0x005C}}, // Set Gamma G
++	{0x5380, 1, {0x0066}},
++	{0x5480, 1, {0x001F}},
++	{0x5580, 1, {0x0026}},
++	{0x5680, 1, {0x00A6}},
++	{0x5780, 1, {0x0021}},
++	{0x5880, 1, {0x004A}},
++	{0x5980, 1, {0x0065}},
++	{0x5A80, 1, {0x0075}},
++	{0x5B80, 1, {0x008A}},
++	{0x5C80, 1, {0x0026}},
++	{0x5D80, 1, {0x0053}},
++	{0x5E80, 1, {0x0009}},
++	{0x5F80, 1, {0x0036}},
++	{0x6080, 1, {0x0053}},
++	{0x6180, 1, {0x006A}},
++	{0x6280, 1, {0x001A}},
++	{0x6380, 1, {0x0035}},
++	{0x6480, 1, {0x0060}},
++	{0x6580, 1, {0x003F}},
++	{0x6680, 1, {0x001B}},
++	{0x6780, 1, {0x0022}},
++	{0x6880, 1, {0x0081}},
++	{0x6980, 1, {0x0027}},
++	{0x6A80, 1, {0x0057}},
++	{0x6B80, 1, {0x0076}},
++	{0x6C80, 1, {0x006F}},
++	{0x6D80, 1, {0x007C}},
++	{0x6E80, 1, {0x001A}},
++	{0x6F80, 1, {0x002D}},
++	{0x7080, 1, {0x0009}}, // Set Gamma B
++	{0x7180, 1, {0x0023}},
++	{0x7280, 1, {0x004F}},
++	{0x7380, 1, {0x0069}},
++	{0x7480, 1, {0x0015}},
++	{0x7580, 1, {0x003E}},
++	{0x7680, 1, {0x0069}},
++	{0x7780, 1, {0x0075}},
++	{0x7880, 1, {0x0020}},
++	{0x7980, 1, {0x0026}},
++	{0x7A80, 1, {0x00AE}},
++	{0x7B80, 1, {0x0022}},
++	{0x7C80, 1, {0x0050}},
++	{0x7D80, 1, {0x0067}},
++	{0x7E80, 1, {0x0079}},
++	{0x7F80, 1, {0x0086}},
++	{0x8080, 1, {0x0028}},
++	{0x8180, 1, {0x0053}},
++	{0x8280, 1, {0x0009}},
++	{0x8380, 1, {0x0034}},
++	{0x8480, 1, {0x0058}},
++	{0x8580, 1, {0x0067}},
++	{0x8680, 1, {0x0018}},
++	{0x8780, 1, {0x002F}},
++	{0x8880, 1, {0x005F}},
++	{0x8980, 1, {0x0037}},
++	{0x8A80, 1, {0x001A}},
++	{0x8B80, 1, {0x0020}},
++	{0x8C80, 1, {0x0073}},
++	{0x8D80, 1, {0x0016}},
++	{0x8E80, 1, {0x0041}},
++	{0x8F80, 1, {0x006A}},
++	{0x9080, 1, {0x0081}},
++	{0x9180, 1, {0x009B}},
++	{0x9280, 1, {0x0048}},
++	{0x9380, 1, {0x0062}},
++#endif
+ #if defined(USE_TENTATIVE_COMMAND)
+ 	{0x2780, 1, {0x0033}},
+ #endif
+ 	{0x1580, 1, {0x00AA}}, // Lock CMD2
+ 	{0xF200, 1, {0x0001}}, // Cehck CMD status
++	{REGFLAG_DELAY, 100, {}},
+ #if defined(USE_TENTATIVE_COMMAND)
+ 	//{0x1100, 1, {0x0000}}, // sleep out
+ 	//{REGFLAG_DELAY, 100, {}},
+ #endif
+-	{0x3B00, 1, {0x0043}}, // RGB Setup
+-	{0x3B01, 1, {0x0004}},
+-	{0x3B02, 1, {0x0004}},
+-	{0x3B03, 1, {0x0008}},
+-	{0x3B04, 1, {0x0007}},
+ 	/* LGE_CHANGE [james.jang@lge.com] 2010-06-18, off LEDPWM(7Fh -> 00h) */
+ 	//{0x5100, 1, {0x007F}}, // Output LEDPWM=50% Duty
+ 	{0x5100, 1, {0x0000}}, // Output LEDPWM=0% Duty
+ 	{0x5300, 1, {0x002C}}, // Output LEDPWM=50% Duty
+ 
++	/* LGE_CHANGE_S [dojip.kim@lge.com] 2010-09-11, set the address */
+ 	// set horizontal address 
+ 	{0x2a00, 1, {0x0000}}, // XSA
+ 	{0x2a01, 1, {0x0000}}, // XSA
+@@ -353,13 +912,12 @@ struct display_table {
+ 	{0x2b01, 1, {0x0000}}, // YSA
+ 	{0x2b02, 1, {0x0000}}, // YEA
+ 	{0x2b03, 1, {0x01df}}, // YEA, 480-1
++	/* LGE_CHANGE_E [dojip.kim@lge.com] 2010-09-11 */
+ 
+ 	{0x3600, 1, {0x0008}}, // Set RGB
+-	{0x3800, 1, {0x0000}}, // Set Idle Mode Off
+ 	{0x3A00, 1, {0x0055}}, // Set RGB565
+-
++	{0x3800, 1, {0x0000}}, // Set Idle Mode Off
+ 	{0x3500, 1, {0x0000}}, // TE On, Vsync On
+-
+ 	{0x2900, 1, {0x0000}}, // Display On
+ 	{REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+@@ -377,7 +935,7 @@ void display_table(struct display_table *table, unsigned int count)
+ 			
+             case REGFLAG_DELAY :
+                 msleep(table[i].count);
+-				EPRINTK("%s() : delay %d msec\n", __func__, table[i].count);
++				        EPRINTK("%s() : delay %d msec\n", __func__, table[i].count);
+                 break;
+ 				
+             case REGFLAG_END_OF_TABLE :
+@@ -385,38 +943,13 @@ void display_table(struct display_table *table, unsigned int count)
+ 				
+             default:
+                 mddi_host_register_cmds_write32(reg, table[i].count, table[i].val_list, 1, 0, 0);
+-		//EPRINTK("%s: reg : %x, val : %x.\n", __func__, reg, table[i].val_list[0]);
++                //EPRINTK("%s: reg : 0x%04X, val : 0x%04X\n", __func__, reg, table[i].val_list[0]);
+        	}
+     }
+ 	
+ }
+ 
+-static void compare_table(struct display_table *table, unsigned int count)
+-{
+-	unsigned int i;
+-
+-    for(i = 0; i < count; i++) {
+-		
+-        unsigned reg;
+-        reg = table[i].reg;
+-		
+-        switch (reg) {
+-			
+-            case REGFLAG_DELAY :              
+-                break;
+-				
+-            case REGFLAG_END_OF_TABLE :
+-                break;
+-				
+-            default:
+-                mddi_host_register_cmds_write32(reg, table[i].count, table[i].val_list, 0, 0, 0);
+-		EPRINTK("%s: reg : %x, val : %x.\n", __func__, reg, table[i].val_list[0]);
+-       	}
+-    }	
+-}
+-
+-
+-static void mddi_novatek_vsync_set_handler(msm_fb_vsync_handler_type handler,	/* ISR to be executed */
++static void mddi_novatek_vsync_set_handler(msm_fb_vsync_handler_type handler,	
+ 					 void *arg)
+ {
+ 	boolean error = FALSE;
+@@ -453,91 +986,13 @@ static void mddi_novatek_vsync_set_handler(msm_fb_vsync_handler_type handler,	/*
+ 
+ static void mddi_novatek_lcd_vsync_detected(boolean detected)
+ {
+-	/* static timetick_type start_time = 0; */
+-	static struct timeval start_time;
+-	static boolean first_time = TRUE;
+-	/* unit32 mdp_cnt_val = 0; */
+-	/* timetick_type elapsed_us; */
+-	struct timeval now;
+-	uint32 elapsed_us;
+-	uint32 num_vsyncs;
+-
+ 	mddi_vsync_detect_enabled = TRUE;;
++}
+ 
+-#if 0 /* Block temporaly till vsync implement */
+-	mddi_queue_register_write_int(0x2C00, 0);
+-
+-	if ((detected) || (mddi_novatek_vsync_attempts > 5)) {
+-		if ((detected) || (mddi_novatek_monitor_refresh_value)) {
+-			/* if (start_time != 0) */
+-			if (!first_time) {
+-				jiffies_to_timeval(jiffies, &now);
+-				elapsed_us =
+-					(now.tv_sec - start_time.tv_sec) * 1000000 +
+-					now.tv_usec - start_time.tv_usec;
+-				/*
+-				 * LCD is configured for a refresh every usecs,
+-				 *  so to determine the number of vsyncs that
+-				 *  have occurred since the last measurement
+-				 *  add half that to the time difference and
+-				 *  divide by the refresh rate.
+-				 */
+-				num_vsyncs = (elapsed_us +
+-						(mddi_novatek_rows_per_refresh >>
+-						 1))/
+-					mddi_novatek_rows_per_refresh;
+-				/*
+-				 * LCD is configured for * hsyncs (rows) per
+-				 * refresh cycle. Calculate new rows_per_second
+-				 * value based upon these new measuerments.
+-				 * MDP can update with this new value.
+-				 */
+-				mddi_novatek_rows_per_second =
+-					(mddi_novatek_rows_per_refresh * 1000 *
+-					 num_vsyncs) / (elapsed_us / 1000);
+-			}
+-			/* start_time = timetick_get();*/
+-			first_time = FALSE;
+-			jiffies_to_timeval(jiffies, &start_time);
+-			if (mddi_novatek_report_refresh_measurements) {
+-				(void)mddi_queue_register_read_int(VPOS,
+-									&mddi_novatek_curr_vpos);
+-				/* mdp_cnt_val = MDP_LINE_COUNT; */
+-			}
+-		}
+-		/* if detected = TRUE, client initiated wakeup was detected */
+-		if (mddi_novatek_vsync_handler != NULL) {
+-			(*mddi_novatek_vsync_handler)
+-				(mddi_novatek_vsync_handler_arg);
+-			mddi_novatek_vsync_handler = NULL;
+-		}
+-		mddi_vsync_detect_enabled = FALSE;
+-		mddi_novatek_vsync_attempts = 0;
+-		/* need to disable the interrupt wakeup */
+-		if (!mddi_queue_register_write_int(INTMSK, 0x0001))
+-			printk("Vsync interrupt disable failed!\n");
+-		if (!detected) {
+-			/* give up after 5 failed attempts but show error */
+-			printk("Vsync detection failed!\n");
+-		} else if ((mddi_novatek_monitor_refresh_value) &&
+-				(mddi_novatek_report_refresh_measurements)) {
+-			printk("  Last Line Counter=%d!\n",
+-					mddi_novatek_curr_vpos);
+-			/* MDDI_MSG_NOTICE("  MDP Line Counter=%d!\n",mdp_cnt_val); */
+-			printk("  Lines Per Second=%d!\n",
+-					mddi_novatek_rows_per_second);
+-		}
+-		/* clear the interrupt */
+-		if (!mddi_queue_register_write_int(INTFLG, 0x0001))
+-			printk("Vsync interrupt clear failed!\n");
+-	} else {
+-		/* if detected = FALSE, we woke up from hibernation, but did not
+-		 * detect client initiated wakeup.
+-		 */
+-		mddi_novatek_vsync_attempts++;
+-	}
++// LGE_CHANGE [dojip.kim@lge.com] 2010-07-26, HACK: early wakeup touch for performance
++#ifdef CONFIG_MACH_MSM7X27_THUNDERC_SPRINT
++extern int ts_set_vreg(unsigned char onoff);
+ #endif
+-}
+ 
+ static int mddi_novatek_lcd_on(struct platform_device *pdev)
+ {
+@@ -560,10 +1015,15 @@ static int mddi_novatek_lcd_on(struct platform_device *pdev)
+ 		is_lcd_on = TRUE;
+ 	}
+ 
++	// LGE_CHANGE [dojip.kim@lge.com] 2010-07-26, HACK: early wakeup touch for performance
++#ifdef CONFIG_MACH_MSM7X27_THUNDERC_SPRINT
++	ts_set_vreg(1);
++#endif
++
+ 	// LCD HW Reset
+ 	mddi_novatek_lcd_panel_poweron();	
+ 	display_table(mddi_novatek_initialize, sizeof(mddi_novatek_initialize)/sizeof(struct display_table));
+-	display_table(mddi_novatek_display_on, sizeof(mddi_novatek_display_on) / sizeof(struct display_table));
++	// display_table(mddi_novatek_display_on, sizeof(mddi_novatek_display_on) / sizeof(struct display_table));
+ 	is_lcd_on = TRUE;
+ 	return 0;
+ }
+@@ -576,34 +1036,37 @@ static int mddi_novatek_lcd_off(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
+-ssize_t mddi_novatek_lcd_show_onoff(struct platform_device *pdev)
++ssize_t mddi_novatek_lcd_show_onoff(struct device *dev, struct device_attribute *attr,
++		char *buf)
+ {
+ 	EPRINTK("%s : strat\n", __func__);
+ 	return 0;
+ }
+ 
+-ssize_t mddi_novatek_lcd_store_onoff(struct platform_device *pdev, struct device_attribute *attr, const char *buf, size_t count)
++ssize_t mddi_novatek_lcd_store_onoff(struct device *dev, struct device_attribute *attr, 
++		const char *buf, size_t count)
+ {
+-	int onoff; // = simple_strtol(buf, NULL, count);
++	int onoff;
++	struct platform_device *pdev = to_platform_device(dev); 
++
+ 	sscanf(buf, "%d", &onoff);
+ 
+ 	EPRINTK("%s: onoff : %d\n", __func__, onoff);
+ 	
+ 	if(onoff) {
+-		is_lcd_on = TRUE;
+-		display_table(mddi_novatek_display_on, sizeof(mddi_novatek_display_on) / sizeof(struct display_table));
++		mddi_novatek_lcd_on(pdev);
+ 	}
+ 	else {
+-		is_lcd_on = FALSE;
+-		display_table(mddi_novatek_display_off, sizeof(mddi_novatek_display_off) / sizeof(struct display_table));
++		mddi_novatek_lcd_off(pdev);
+ 	}
+ 
+-	return 0;
++	return count;
+ }
+ 
+ int mddi_novatek_position(void)
+ {
+-	display_table(mddi_novatek_position_table, ARRAY_SIZE(mddi_novatek_position_table));
++	display_table(mddi_novatek_position_table, 
++			ARRAY_SIZE(mddi_novatek_position_table));
+ 	return 0;
+ }
+ EXPORT_SYMBOL(mddi_novatek_position);
+@@ -659,8 +1122,18 @@ static int mddi_novatek_lcd_init(void)
+ 	id = mddi_get_client_id();
+ 
+ 	/* TODO: Check client id */
++#endif
+ 
++/* LGE_CHANGE [james.jang@lge.com] 2010-08-28, probe LCD */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++	gpio_tlmm_config(GPIO_CFG(101, 0, GPIO_INPUT, GPIO_PULL_DOWN, GPIO_2MA), 
++			  GPIO_ENABLE);
++	gpio_configure(101, GPIOF_INPUT);
++	if (gpio_get_value(101) != 1)
++		return -ENODEV;
++	g_mddi_lcd_probe = 1;
+ #endif
++
+ 	ret = platform_driver_register(&this_driver);
+ 	if (!ret) {
+ 		pinfo = &novatek_panel_data0.panel_info;
+@@ -731,9 +1204,10 @@ static void mddi_novatek_lcd_panel_poweron(void)
+ 		gpio_set_value(pdata->gpio, 1);
+ 		mdelay(10);
+ 		gpio_set_value(pdata->gpio, 0);
+-		mdelay(10);
++		/* LGE_CHANGE [james.jang@lge.com] 2010-09-11, up 50% for stability */
++		mdelay(15); /* wait for more than 10ms */
+ 		gpio_set_value(pdata->gpio, 1);
+-		mdelay(20);
++		mdelay(30); /* wait for more than 20ms */
+ 	}
+ }
+ 
+diff --git a/drivers/video/msm/mddihost.h b/drivers/video/msm/mddihost.h
+index 7319bb5..287c9b6 100644
+--- a/drivers/video/msm/mddihost.h
++++ b/drivers/video/msm/mddihost.h
+@@ -83,6 +83,11 @@
+ /* LGE_CHANGES_E [minjong.gong] 2010-03-23 Google Mass 3G Hitahci MDDI I/F LCD driver */
+ /* LGE_CHANGES [dojip.kim@lge.com] 2010-04-23, [LS670] Novatek MDDI I/F LCD driver */
+ 	MDDI_LCD_NOVATEK_NT35451,
++/* LGE_CHANGES_S [infopc@lge.com], 2009-08-18 [LS680] lcd device driver */
++#if defined (CONFIG_FB_MSM_MDDI_LGIT_HVGA)
++	MDDI_LCD_INNOTEK_IM300WBN1A,
++#endif
++/* LGE_CHANGES_E [infopc@lge.com], 2009-08-18 [LS680] */
+ 	MDDI_NUM_LCD_TYPES,
+ 	MDDI_LCD_DEFAULT = MDDI_LCD_TOSHIBA
+ } mddi_lcd_type;
+diff --git a/drivers/video/msm/mdp.c b/drivers/video/msm/mdp.c
+index 2f34eec..c679f37 100644
+--- a/drivers/video/msm/mdp.c
++++ b/drivers/video/msm/mdp.c
+@@ -42,6 +42,10 @@
+ #include "mdp4.h"
+ #endif
+ 
++#ifdef CONFIG_HAS_EARLYSUSPEND
++#undef CONFIG_HAS_EARLYSUSPEND
++#endif
++
+ static struct clk *mdp_clk;
+ static struct clk *mdp_pclk;
+ 
+diff --git a/drivers/video/msm/mdp4_overlay_lcdc.c b/drivers/video/msm/mdp4_overlay_lcdc.c
+index 26a6584..af39dce 100644
+--- a/drivers/video/msm/mdp4_overlay_lcdc.c
++++ b/drivers/video/msm/mdp4_overlay_lcdc.c
+@@ -250,7 +250,7 @@ int mdp_lcdc_off(struct platform_device *pdev)
+ 	ret = panel_next_off(pdev);
+ 
+ 	/* delay to make sure the last frame finishes */
+-	mdelay(100);
++	msleep(16);
+ 
+ #ifdef LCDC_RGB_UNSTAGE
+ 	/* dis-engage rgb0 from mixer0 */
+diff --git a/drivers/video/msm/mdp_dma.c b/drivers/video/msm/mdp_dma.c
+index b4ac4af..c405e74 100755
+--- a/drivers/video/msm/mdp_dma.c
++++ b/drivers/video/msm/mdp_dma.c
+@@ -34,10 +34,6 @@
+ 
+ #include <linux/fb.h>
+ 
+-#ifdef CONFIG_MACH_LGE
+-#include <mach/board_lge.h>
+-#endif
+-
+ #include "mdp.h"
+ #include "msm_fb.h"
+ #include "mddihost.h"
+@@ -55,66 +51,72 @@
+ uint32 mdp_dma2_update_time_in_usec;
+ uint32 mdp_total_vdopkts;
+ 
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++int g_mddi_lcd_probe = 0;
++#endif
++
+ extern u32 msm_fb_debug_enabled;
+ extern struct workqueue_struct *mdp_dma_wq;
+ 
+ int vsync_start_y_adjust = 4;
+-extern int LG_ErrorHandler_enable ;	/*LGE_CHANGE [bluerti@lge.com] */
+ 
+ /* LGE_CHANGE
+   * Change to apply workaround code according to the board revision info.
+   * 2010-06-10, minjong.gong@lge.com
+   */
+-#ifdef CONFIG_FB_MSM_MDDI_HITACHI_HVGA
++#if defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) || \
++	defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++	
+ #include <mach/board_lge.h>
+ 
+-struct display_table {
+-    unsigned reg;
+-    unsigned char count;
+-    unsigned char val_list[20];
++struct hitachi_display_table {
++	unsigned reg;
++	unsigned char count;
++	unsigned char val_list[20];
+ };
+ 
+-#define REGFLAG_END_OF_TABLE      0xFFFF   // END OF REGISTERS MARKER
++#define HITACHI_REGFLAG_END_OF_TABLE      0xFFFF   // END OF REGISTERS MARKER
+ 
+-static struct display_table mddi_hitachi_2c[] = {
++static struct hitachi_display_table mddi_hitachi_2c[] = {
+ 	{0x2c, 4, {0x00, 0x00, 0x00, 0x00}},
+-	{REGFLAG_END_OF_TABLE, 0x00, {}}
++	{HITACHI_REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+-static struct display_table mddi_hitachi_position_table[] = {
++static struct hitachi_display_table mddi_hitachi_position_table[] = {
+ 	// set column address 
+ 	{0x2a,  4, {0x00, 0x00, 0x01, 0x3f}},
+ 	// set page address 
+ 	{0x2b,  4, {0x00, 0x00, 0x01, 0xdf}},
+-	{REGFLAG_END_OF_TABLE, 0x00, {}}
++	{HITACHI_REGFLAG_END_OF_TABLE, 0x00, {}}
+ };
+-extern void display_table(struct display_table *table, unsigned int count);
++extern void hitachi_display_table(struct hitachi_display_table *table, unsigned int count);
+ #endif
+ 
+ /* LGE_CHANGE [dojip.kim@lge.com] 2010-05-20,
+  * add code to prevent LCD shift
+  */
+-#ifdef CONFIG_FB_MSM_MDDI_NOVATEK_HVGA
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA) || \
++	defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)	
+ #define REGFLAG_END_OF_TABLE      0xFFFF   // END OF REGISTERS MARKER
+ 
+-	struct display_table {
+-	    unsigned reg;
+-	    unsigned char count;
+-	    unsigned val_list[256];
+-	};
+-
+-	struct display_table mddi_novatek_position_table[] = {
+-		// set horizontal address 
+-		{0x2a00, 1, {0x0000}}, // XSA
+-		{0x2a01, 1, {0x0000}}, // XSA
+-		{0x2a02, 1, {0x0000}}, // XEA
+-		{0x2a03, 1, {0x013f}}, // XEA, 320-1
+-		// set vertical address 
+-		{0x2b00, 1, {0x0000}}, // YSA
+-		{0x2b01, 1, {0x0000}}, // YSA
+-		{0x2b02, 1, {0x0000}}, // YEA
+-		{0x2b03, 1, {0x01df}}, // YEA, 480-1
+-		{REGFLAG_END_OF_TABLE, 0x00, {}}
+-	};
++struct display_table {
++	unsigned reg;
++	unsigned char count;
++	unsigned val_list[256];
++};
++
++struct display_table mddi_novatek_position_table[] = {
++	// set horizontal address 
++	{0x2a00, 1, {0x0000}}, // XSA
++	{0x2a01, 1, {0x0000}}, // XSA
++	{0x2a02, 1, {0x0000}}, // XEA
++	{0x2a03, 1, {0x013f}}, // XEA, 320-1
++	// set vertical address 
++	{0x2b00, 1, {0x0000}}, // YSA
++	{0x2b01, 1, {0x0000}}, // YSA
++	{0x2b02, 1, {0x0000}}, // YEA
++	{0x2b03, 1, {0x01df}}, // YEA, 480-1
++	{REGFLAG_END_OF_TABLE, 0x00, {}}
++};
+ extern void display_table(struct display_table *table, unsigned int count);
+ #endif
+ 
+@@ -211,56 +213,45 @@ static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
+ 
+ 	dma2_cfg_reg |= DMA_DITHER_EN;
+ 
+-#if CONFIG_LGE_HIDDEN_RESET_PATCH
+-	if (on_hidden_reset) {
+-		src = (uint8 *) lge_get_fb_copy_phys_addr();
+-	} else {
+-		src = (uint8 *) iBuf->buf;
+-		/* starting input address */
+-		src += iBuf->dma_x * outBpp + iBuf->dma_y * ystride;
+-	}
+-#else
+ 	src = (uint8 *) iBuf->buf;
+ 	/* starting input address */
+ 	src += iBuf->dma_x * outBpp + iBuf->dma_y * ystride;
+-#endif
+ 
+ 	mdp_curr_dma2_update_width = iBuf->dma_w;
+ 	mdp_curr_dma2_update_height = iBuf->dma_h;
+ 
+-#if defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERG)
+-	if (lge_bd_rev <= LGE_REV_E) {
+-		/* Use workaround code for 1st cut LCD.
+-		 * 2010-04-22, minjong.gong@lge.com
+-		 */
+-		display_table(mddi_hitachi_2c,
+-				sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++	if (g_mddi_lcd_probe== 0) {
++		hitachi_display_table(mddi_hitachi_position_table,
++			sizeof(mddi_hitachi_position_table) / 
++			sizeof(struct hitachi_display_table));
+ 	}
+-	/* Add code to prevent LCD shift.
+-	 * 2010-05-18, minjong.gong@lge.com
+-	 */
+-	display_table(mddi_hitachi_position_table,
+-			sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+-#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERC)
+-	if (lge_bd_rev <= LGE_REV_D){
+-		/* Use workaround code for 1st cut LCD.
+-		 * 2010-04-22, minjong.gong@lge.com
+-		 */
+-		display_table(mddi_hitachi_2c, sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
++	else {
++		display_table(mddi_novatek_position_table, 
++			sizeof(mddi_novatek_position_table) / 
++			sizeof(struct display_table));
+ 	}
++#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) 
++#if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC)
+ 	/* Add code to prevent LCD shift.
+ 	 * 2010-05-18, minjong.gong@lge.com
+ 	 */
+-	display_table(mddi_hitachi_position_table, sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+-#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERA)
+-	display_table(mddi_hitachi_2c,
+-			sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
++	hitachi_display_table(mddi_hitachi_position_table,
++			sizeof(mddi_hitachi_position_table) / 
++			sizeof(struct hitachi_display_table));
++#elif defined(CONFIG_MACH_MSM7X27_THUNDERA)
++	hitachi_display_table(mddi_hitachi_2c,
++			sizeof(mddi_hitachi_2c) / 
++			sizeof(struct hitachi_display_table));
+ #endif
+-
+-#ifdef CONFIG_FB_MSM_MDDI_NOVATEK_HVGA
++	/* LGE_CHANGE [dojip.kim@lge.com] 2010-05-20,
++	 * add code to prevent LCD shift
++	 */
++#elif CONFIG_FB_MSM_MDDI_NOVATEK_HVGA
+ 	display_table(mddi_novatek_position_table, 
+-		sizeof(mddi_novatek_position_table) / sizeof(struct display_table));
+-#endif
++		sizeof(mddi_novatek_position_table) / 
++		sizeof(struct display_table));
++#endif /* CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA */
+ 
+ 	/* MDP cmd block enable */
+ 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
+@@ -291,36 +282,60 @@ static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
+ 	}
+ 
+ 	if (mddi_dest) {
+-
+ #ifdef CONFIG_FB_MSM_MDP22
+ 		MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x0194,
+ 			 (iBuf->dma_y << 16) | iBuf->dma_x);
+ 		MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x01a0, mddi_ld_param);
++
++		/* LGE_CHANGE [james.jang@lge.com] 2010-08-29 */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)		
++		if (g_mddi_lcd_probe == 0) { /* Hitachi LCD */
++			MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x01a4,
++				(MDDI_VDO_PACKET_DESC << 16) | mddi_vdo_packet_reg);
++		}
++		else { /* Novatek LCD */
++			MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x01a4,
++				(mddi_pkt_desc << 16) | mddi_vdo_packet_reg);
++		}
++#elif defined (CONFIG_FB_MSM_MDDI_HITACHI_HVGA)		
++		/* Don't apply 6013 patch only when using Hitachi HVGA module. 
++		 * 2010-07-28. minjong.gong@lge.com 
++		 */
+ 		MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x01a4,
+-	/* Don't apply 6013 patch only when using Hitachi HVGA module. 2010-07-28. minjong.gong@lge.com */
+-	#if defined (CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
+ 			(MDDI_VDO_PACKET_DESC << 16) | mddi_vdo_packet_reg);
+-	#else
+-			(mddi_pkt_desc << 16) | mddi_vdo_packet_reg);
+-	#endif
+ #else
++		MDP_OUTP(MDP_CMD_DEBUG_ACCESS_BASE + 0x01a4,
++			(mddi_pkt_desc << 16) | mddi_vdo_packet_reg);
++#endif
++#else /* !CONFIG_FB_MSM_MDP22 */
+ 		MDP_OUTP(MDP_BASE + 0x90010, (iBuf->dma_y << 16) | iBuf->dma_x);
+ 		MDP_OUTP(MDP_BASE + 0x00090, mddi_ld_param);
++
++		/* LGE_CHANGE [james.jang@lge.com] 2010-08-29 */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)		
++		if (g_mddi_lcd_probe == 1) {
++			MDP_OUTP(MDP_BASE + 0x00094,
++				(0x5565 /*MDDI_VDO_PACKET_DESC*/ << 16) | 
++				mddi_vdo_packet_reg);
++		}
++		else {
++			MDP_OUTP(MDP_BASE + 0x00094,
++				(MDDI_VDO_PACKET_DESC << 16) | mddi_vdo_packet_reg);
++		}
++#elif defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA)
+ /* LGE_CHANGE [dojip.kim@lge.com] 2010-04-23, [LS670] fixed the pixel format */
+-#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA)
+ 		MDP_OUTP(MDP_BASE + 0x00094,
+ 			 (0x5565 /*MDDI_VDO_PACKET_DESC*/ << 16) | mddi_vdo_packet_reg);
+-#else /* original */
++#elif defined (CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
++		/* Don't apply 6013 patch only when using Hitachi HVGA module. 
++		 * 2010-07-28. minjong.gong@lge.com */
+ 		MDP_OUTP(MDP_BASE + 0x00094,
+-	/* Don't apply 6013 patch only when using Hitachi HVGA module. 2010-07-28. minjong.gong@lge.com */
+-	#if defined (CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
+ 			(MDDI_VDO_PACKET_DESC << 16) | mddi_vdo_packet_reg);
+-	#else
++#else
++		MDP_OUTP(MDP_BASE + 0x00094,
+ 			(mddi_pkt_desc << 16) | mddi_vdo_packet_reg);
+-	#endif
+-#endif
+-
+ #endif
++#endif /* CONFIG_FB_MSM_MDP22 */
+ 	} else {
+ 		/* setting EBI2 LCDC write window */
+ 		pdata->set_rect(iBuf->dma_x, iBuf->dma_y, iBuf->dma_w,
+@@ -645,11 +660,6 @@ void mdp_dma_pan_update(struct fb_info *info)
+ 		/* waiting for this update to complete */
+ 		mfd->pan_waiting = TRUE;
+ 		wait_for_completion_killable(&mfd->pan_comp);
+-		/*LGE_CHANGE_S [bluerti@lge.com] 2009-08-24 */
+-		if (LG_ErrorHandler_enable) {
+-			mfd->dma_fnc(mfd);
+-		}
+-		/*LGE_CHANGE_E [bluerti@lge.com] */
+ 	} else
+ 		mfd->dma_fnc(mfd);
+ }
+diff --git a/drivers/video/msm/mdp_dma_lcdc.c b/drivers/video/msm/mdp_dma_lcdc.c
+index 77e47b0..a0541e4 100644
+--- a/drivers/video/msm/mdp_dma_lcdc.c
++++ b/drivers/video/msm/mdp_dma_lcdc.c
+@@ -314,7 +314,7 @@ int mdp_lcdc_off(struct platform_device *pdev)
+ 	ret = panel_next_off(pdev);
+ 
+ 	/* delay to make sure the last frame finishes */
+-	mdelay(100);
++	msleep(16);
+ 
+ 	return ret;
+ }
+diff --git a/drivers/video/msm/mdp_dma_tv.c b/drivers/video/msm/mdp_dma_tv.c
+index e7134b8..af871ec 100644
+--- a/drivers/video/msm/mdp_dma_tv.c
++++ b/drivers/video/msm/mdp_dma_tv.c
+@@ -106,7 +106,7 @@ int mdp_dma3_off(struct platform_device *pdev)
+ 	mdp_pipe_ctrl(MDP_DMA3_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+ 
+ 	/* delay to make sure the last frame finishes */
+-	mdelay(100);
++	msleep(16);
+ 
+ 	return ret;
+ }
+diff --git a/drivers/video/msm/mdp_hw.h b/drivers/video/msm/mdp_hw.h
+old mode 100644
+new mode 100755
+diff --git a/drivers/video/msm/mdp_hw_init.c b/drivers/video/msm/mdp_hw_init.c
+old mode 100644
+new mode 100755
+index 3778ac5..bf4b487
+--- a/drivers/video/msm/mdp_hw_init.c
++++ b/drivers/video/msm/mdp_hw_init.c
+@@ -18,6 +18,12 @@
+ 
+ #include "mdp.h"
+ 
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++#include <asm/gpio.h>
++
++extern int g_mddi_lcd_probe;
++#endif
++
+ /* mdp primary csc limit vector */
+ uint32 mdp_plv[] = { 0x10, 0xeb, 0x10, 0xf0 };
+ 
+@@ -592,6 +598,7 @@ static void mdp_load_lut_param(void)
+   * Change code to apply new LUT for display quality. 2010-08-03. minjong.gong@lge.com 
+   * Below LUT Table was received from taeyun.kim@lge.com.
+   */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA) || defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
+ static u32 thunder_lut_normal[256] = {
+ 	0x00000000, 0x00010101, 0x00010101, 0x00020202, 0x00030302, 0x00030303, 0x00040404, 0x00040504,
+ 	0x00050505, 0x00060606, 0x00060706, 0x00070707, 0x00080808, 0x00080908, 0x00090909, 0x000A0A09,
+@@ -661,30 +668,154 @@ static void mdp_load_lut_param(void)
+ 	0x00F2FCEE, 0x00F3FDEF, 0x00F4FEF0, 0x00F5FFF1, 0x00F6FFF2, 0x00F7FFF3, 0x00F8FFF4, 0x00F9FFF5,
+ 	0x00FAFFF6, 0x00FBFFF7, 0x00FDFFF8, 0x00FEFFF8, 0x00FFFFF9, 0x00FFFFFA, 0x00FFFFFB, 0x00FFFFFC
+ };
++#endif
++
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA) || defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA)
++/* 0x00 RR BB GG */
++static u32 thunder_lut_normal_novatek[256] = {
++	0x00000000, 0x00010101, 0x00010102, 0x00020202, 0x00030303, 0x00040404, 0x00040405, 0x00050505,
++	0x00060606, 0x00070707, 0x00070708, 0x00080808, 0x00090909, 0x000A0A0A, 0x000A0A0B, 0x000B0B0B,
++	0x000C0C0C, 0x000D0D0D, 0x000D0D0E, 0x000E0E0F, 0x000F0F0F, 0x00101010, 0x00111111, 0x00111112,
++	0x00121213, 0x00131313, 0x00141414, 0x00151515, 0x00151516, 0x00161617, 0x00171718, 0x00181818,
++	0x00191919, 0x001A1A1A, 0x001A1A1B, 0x001B1B1C, 0x001C1C1D, 0x001D1D1E, 0x001E1E1E, 0x001F1F1F,
++	0x00202020, 0x00202021, 0x00212122, 0x00222223, 0x00232324, 0x00242425, 0x00252526, 0x00262627,
++	0x00272728, 0x00282829, 0x0029292A, 0x002A2A2B, 0x002B2B2C, 0x002C2C2D, 0x002D2D2E, 0x002E2E2F,
++	0x002F2F30, 0x00303031, 0x00313132, 0x00323233, 0x00333334, 0x00343435, 0x00353536, 0x00363637,
++	0x00373738, 0x00383839, 0x0039393A, 0x003A3A3B, 0x003B3B3D, 0x003C3C3E, 0x003E3E3F, 0x003F3F40,
++	0x00404041, 0x00414142, 0x00424243, 0x00434345, 0x00444446, 0x00454547, 0x00474748, 0x00484849,
++	0x0049494B, 0x004A4A4C, 0x004B4B4D, 0x004D4D4E, 0x004E4E4F, 0x004F4F51, 0x00505052, 0x00525253,
++	0x00535354, 0x00545456, 0x00555557, 0x00565658, 0x0058585A, 0x0059595B, 0x005A5A5C, 0x005C5C5D,
++	0x005D5D5F, 0x005E5E60, 0x005F5F61, 0x00616163, 0x00626264, 0x00636365, 0x00656567, 0x00666668,
++	0x00676769, 0x0069696B, 0x006A6A6C, 0x006B6B6D, 0x006D6D6F, 0x006E6E70, 0x006F6F71, 0x00717173,
++	0x00727274, 0x00737376, 0x00757577, 0x00767678, 0x0077777A, 0x0079797B, 0x007A7A7C, 0x007B7B7E,
++	0x007D7D7F, 0x007E7E81, 0x007F7F82, 0x00818183, 0x00828285, 0x00838386, 0x00858587, 0x00868689,
++	0x0087878A, 0x0089898B, 0x008A8A8D, 0x008C8C8E, 0x008D8D90, 0x008F8F91, 0x00909093, 0x00919194,
++	0x00939396, 0x00949497, 0x00969699, 0x0097979A, 0x0099999C, 0x009A9A9D, 0x009B9B9F, 0x009D9DA0,
++	0x009E9EA1, 0x00A0A0A3, 0x00A1A1A4, 0x00A2A2A6, 0x00A4A4A7, 0x00A5A5A9, 0x00A7A7AA, 0x00A8A8AB,
++	0x00A9A9AD, 0x00ABABAE, 0x00ACACAF, 0x00ADADB1, 0x00AFAFB2, 0x00B0B0B3, 0x00B1B1B5, 0x00B2B2B6,
++	0x00B4B4B7, 0x00B5B5B9, 0x00B6B6BA, 0x00B8B8BB, 0x00B9B9BD, 0x00BABABE, 0x00BBBBBF, 0x00BCBCC0,
++	0x00BEBEC1, 0x00BFBFC3, 0x00C0C0C4, 0x00C1C1C5, 0x00C2C2C6, 0x00C3C3C7, 0x00C5C5C9, 0x00C6C6CA,
++	0x00C7C7CB, 0x00C8C8CC, 0x00C9C9CD, 0x00CACACE, 0x00CBCBCF, 0x00CCCCD0, 0x00CDCDD1, 0x00CECED2,
++	0x00CFCFD3, 0x00D0D0D4, 0x00D1D1D5, 0x00D2D2D6, 0x00D3D3D7, 0x00D4D4D8, 0x00D5D5D9, 0x00D6D6DA,
++	0x00D7D7DB, 0x00D8D8DC, 0x00D8D8DD, 0x00D9D9DE, 0x00DADADF, 0x00DBDBDF, 0x00DCDCE0, 0x00DDDDE1,
++	0x00DDDDE2, 0x00DEDEE3, 0x00DFDFE3, 0x00E0E0E4, 0x00E0E0E5, 0x00E1E1E6, 0x00E2E2E6, 0x00E3E3E7,
++	0x00E3E3E8, 0x00E4E4E9, 0x00E5E5E9, 0x00E5E5EA, 0x00E6E6EB, 0x00E7E7EB, 0x00E7E7EC, 0x00E8E8ED,
++	0x00E8E8ED, 0x00E9E9EE, 0x00EAEAEE, 0x00EAEAEF, 0x00EBEBF0, 0x00EBEBF0, 0x00ECECF1, 0x00ECECF1,
++	0x00EDEDF2, 0x00EDEDF2, 0x00EEEEF3, 0x00EEEEF3, 0x00EFEFF4, 0x00EFEFF4, 0x00F0F0F5, 0x00F0F0F5,
++	0x00F1F1F6, 0x00F1F1F6, 0x00F2F2F7, 0x00F2F2F7, 0x00F3F3F8, 0x00F3F3F8, 0x00F3F3F8, 0x00F4F4F9,
++	0x00F4F4F9, 0x00F5F5FA, 0x00F5F5FA, 0x00F6F6FB, 0x00F6F6FB, 0x00F6F6FB, 0x00F7F7FC, 0x00F7F7FC,
++	0x00F8F8FD, 0x00F8F8FD, 0x00F8F8FD, 0x00F9F9FE, 0x00F9F9FE, 0x00F9F9FE, 0x00FAFAFF, 0x00FAFAFF,
++};
++
++/* 0x00 RR BB GG */
++static u32 thunder_lut_camera_novatek[256] = {
++	0x00000000, 0x00010101, 0x00020202, 0x00030303, 0x00040404, 0x00060606, 0x00070707, 0x00080808,
++	0x00090909, 0x000A0A0A, 0x000B0B0B, 0x000C0C0C, 0x000D0D0D, 0x000E0E0F, 0x000F0F10, 0x00111111,
++	0x00121212, 0x00131313, 0x00141414, 0x00151515, 0x00161616, 0x00171718, 0x00181819, 0x0019191A,
++	0x001A1A1B, 0x001B1B1C, 0x001D1D1D, 0x001E1E1E, 0x001F1F1F, 0x00202020, 0x00212122, 0x00222223,
++	0x00232324, 0x00242425, 0x00252526, 0x00262627, 0x00272728, 0x00292929, 0x002A2A2B, 0x002B2B2C,
++	0x002C2C2D, 0x002D2D2E, 0x002E2E2F, 0x002F2F30, 0x00303031, 0x00313132, 0x00323233, 0x00333334,
++	0x00353536, 0x00363637, 0x00373738, 0x00383839, 0x0039393A, 0x003A3A3B, 0x003B3B3C, 0x003C3C3D,
++	0x003D3D3E, 0x003E3E3F, 0x003F3F41, 0x00404042, 0x00414143, 0x00424244, 0x00444445, 0x00454546,
++	0x00464647, 0x00474748, 0x00484849, 0x0049494A, 0x004A4A4B, 0x004B4B4D, 0x004C4C4E, 0x004D4D4F,
++	0x004E4E50, 0x004F4F51, 0x00505052, 0x00515153, 0x00525254, 0x00535355, 0x00545456, 0x00565657,
++	0x00575758, 0x00585859, 0x0059595A, 0x005A5A5C, 0x005B5B5D, 0x005C5C5E, 0x005D5D5F, 0x005E5E60,
++	0x005F5F61, 0x00606062, 0x00616163, 0x00626264, 0x00636365, 0x00646466, 0x00656567, 0x00666668,
++	0x00676769, 0x0068686A, 0x0069696B, 0x006A6A6C, 0x006B6B6D, 0x006C6C6E, 0x006D6D70, 0x006E6E71,
++	0x006F6F72, 0x00707073, 0x00717174, 0x00727275, 0x00737376, 0x00747477, 0x00757578, 0x00767679,
++	0x0077777A, 0x0078787B, 0x0079797C, 0x007A7A7D, 0x007B7B7E, 0x007C7C7F, 0x007D7D80, 0x007E7E81,
++	0x007F7F82, 0x00808083, 0x00818184, 0x00828285, 0x00838386, 0x00848487, 0x00858588, 0x00868689,
++	0x0087878A, 0x0088888B, 0x0089898C, 0x008A8A8D, 0x008B8B8E, 0x008C8C8F, 0x008D8D90, 0x008E8E91,
++	0x008F8F92, 0x00909093, 0x00919194, 0x00929295, 0x00939396, 0x00949497, 0x00959598, 0x00969699,
++	0x0097979A, 0x0098989B, 0x0099999C, 0x009A9A9D, 0x009B9B9E, 0x009B9B9F, 0x009C9CA0, 0x009D9DA1,
++	0x009E9EA2, 0x009F9FA3, 0x00A0A0A3, 0x00A1A1A4, 0x00A2A2A5, 0x00A3A3A6, 0x00A4A4A7, 0x00A5A5A8,
++	0x00A6A6A9, 0x00A7A7AA, 0x00A8A8AB, 0x00A9A9AC, 0x00AAAAAD, 0x00AAAAAE, 0x00ABABAF, 0x00ACACB0,
++	0x00ADADB1, 0x00AEAEB2, 0x00AFAFB3, 0x00B0B0B4, 0x00B1B1B5, 0x00B2B2B5, 0x00B3B3B6, 0x00B4B4B7,
++	0x00B5B5B8, 0x00B5B5B9, 0x00B6B6BA, 0x00B7B7BB, 0x00B8B8BC, 0x00B9B9BD, 0x00BABABE, 0x00BBBBBF,
++	0x00BCBCC0, 0x00BDBDC1, 0x00BEBEC2, 0x00BFBFC2, 0x00BFBFC3, 0x00C0C0C4, 0x00C1C1C5, 0x00C2C2C6,
++	0x00C3C3C7, 0x00C4C4C8, 0x00C5C5C9, 0x00C6C6CA, 0x00C7C7CB, 0x00C7C7CC, 0x00C8C8CC, 0x00C9C9CD,
++	0x00CACACE, 0x00CBCBCF, 0x00CCCCD0, 0x00CDCDD1, 0x00CECED2, 0x00CFCFD3, 0x00CFCFD4, 0x00D0D0D5,
++	0x00D1D1D5, 0x00D2D2D6, 0x00D3D3D7, 0x00D4D4D8, 0x00D5D5D9, 0x00D6D6DA, 0x00D6D6DB, 0x00D7D7DC,
++	0x00D8D8DD, 0x00D9D9DE, 0x00DADADE, 0x00DBDBDF, 0x00DCDCE0, 0x00DDDDE1, 0x00DDDDE2, 0x00DEDEE3,
++	0x00DFDFE4, 0x00E0E0E5, 0x00E1E1E6, 0x00E2E2E6, 0x00E3E3E7, 0x00E4E4E8, 0x00E4E4E9, 0x00E5E5EA,
++	0x00E6E6EB, 0x00E7E7EC, 0x00E8E8ED, 0x00E9E9ED, 0x00EAEAEE, 0x00EAEAEF, 0x00EBEBF0, 0x00ECECF1,
++	0x00EDEDF2, 0x00EEEEF3, 0x00EFEFF4, 0x00F0F0F4, 0x00F0F0F5, 0x00F1F1F6, 0x00F2F2F7, 0x00F3F3F8,
++	0x00F4F4F9, 0x00F5F5FA, 0x00F6F6FB, 0x00F6F6FB, 0x00F7F7FC, 0x00F8F8FD, 0x00F9F9FE, 0x00FAFAFF,
++};
++#endif
+ 
+ void mdp_load_thunder_lut(int lut_type)
+ {
+ 	int i=0;
++
++/* LGE_CHANGE [james.jang@lge.com] 2010-11-27
++   FIXME */
++#if 0
++	if (g_mddi_lcd_probe == 0) /* Hitachi LCD */
++		return;
++#endif		
++	
+ 	if(lut_type != 0)
+ 	{
+ 		/* MDP cmd block enable */
+ 		mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
+ 
+-		/* bit4 	: LUT Table is Post(After matrix convert), bit2:0  : disable 3 components table. */
++		/* bit4 : LUT Table is Post(After matrix convert), 
++		 * bit2:0  : disable 3 components table. 
++		 */
+ 		MDP_OUTP(MDP_BASE + 0x90070, 0x10);
+ 
+ 		if(lut_type == 1)
+ 		{
+-			for(i=0;i<256;i++) {
++/* LGE_CHANGE [james.jang@lge.com] 2010-09-06 */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)		
++			if (g_mddi_lcd_probe == 0) { /* Hitachi LCD */
++				for(i=0;i<256;i++) {
++					outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_normal[i]); 
++				}
++			}
++			else { /* Novatek LCD */
++				for(i=0;i<256;i++) {
++					outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_normal_novatek[i]); 
++				}
++			}
++#elif defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA)
++			for(i=0;i<256;i++) { // novatek
++				outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_normal_novatek[i]); 
++			}
++#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
++			for(i=0;i<256;i++) { // hitachi
+ 				outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_normal[i]); }
++			
++#endif /* CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA */
+ 		}
+-		else if(lut_type ==2)
+-		{
+-			for(i=0;i<256;i++) {
+-				outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_camera[i]); }			
++		else if(lut_type ==2) {
++/* LGE_CHANGE [james.jang@lge.com] 2010-09-06 */
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)		
++			if (g_mddi_lcd_probe == 0) { /* Hitachi LCD */
++				for(i=0;i<256;i++) {
++					outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_camera[i]); 
++				}
++			}
++			else { /* Novatek LCD */
++				for(i=0;i<256;i++) {
++					outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_camera_novatek[i]); 
++				}
++			}
++#elif defined(CONFIG_FB_MSM_MDDI_NOVATEK_HVGA)
++			for(i=0;i<256;i++) { // novatek
++				outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_camera_novatek[i]); 
++			}
++#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA)
++			for(i=0;i<256;i++) { // hitachi
++				outpdw(MDP_BASE + 0x93800 + i*4, thunder_lut_camera[i]); 
++			}
++#endif /* CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA */
+ 		}
+ 		
+-		/* bit4 	: LUT Table is Post(After matrix convert), bit2:0  : enable 3 components table. */
++		/* bit4	: LUT Table is Post(After matrix convert), 
++		 * bit2:0  : enable 3 components table. 
++		 */
+ 		MDP_OUTP(MDP_BASE + 0x90070, 0x17);
+ 
+ 		/* MDP cmd block disable */
+@@ -696,10 +827,27 @@ void mdp_load_thunder_lut(int lut_type)
+ 
+ #define   IRQ_EN_1__MDP_IRQ___M    0x00000800
+ 
++
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++void lge_probe_lcd(void)
++{
++  gpio_tlmm_config(GPIO_CFG(101, 0, GPIO_INPUT, GPIO_PULL_DOWN, GPIO_2MA), GPIO_ENABLE);
++	gpio_configure(101, GPIOF_INPUT);
++  if (gpio_get_value(101) == 0)
++		g_mddi_lcd_probe = 0; /* Hitachi LCD */
++	else
++		g_mddi_lcd_probe = 1; /* Novatek LCD */
++}
++#endif
++
+ void mdp_hw_init(void)
+ {
+ 	int i;
+ 
++#if defined(CONFIG_FB_MSM_MDDI_NOVATEK_HITACHI_HVGA)
++  lge_probe_lcd();
++#endif	
++
+ 	/* MDP cmd block enable */
+ 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
+ 
+@@ -753,9 +901,10 @@ void mdp_hw_init(void)
+ 
+ #if defined(CONFIG_MACH_MSM7X27_THUNDERG) || defined(CONFIG_MACH_MSM7X27_THUNDERC)
+ 	/* LGE_CHANGE_S
+-	  * Change code to apply new LUT for display quality. 2010-08-03. minjong.gong@lge.com 
+-	  */
+-	mdp_load_thunder_lut(1);	// nornal 
++	 * Change code to apply new LUT for display quality. 
++	 * 2010-08-03. minjong.gong@lge.com 
++	 */
++	mdp_load_thunder_lut(1);	/* type = 1 : Normal LUT */
+ #endif
+ 
+ 	/*
+diff --git a/drivers/video/msm/mdp_ppp.c b/drivers/video/msm/mdp_ppp.c
+old mode 100644
+new mode 100755
+index b2006e4..d787046
+--- a/drivers/video/msm/mdp_ppp.c
++++ b/drivers/video/msm/mdp_ppp.c
+@@ -556,23 +556,19 @@ static void flush_imgs(struct mdp_blit_req *req, int src_bpp, int dst_bpp,
+ {
+ 	uint32_t src0_len, src1_len, dst0_len, dst1_len;
+ 
+-	/* flush src images to memory before dma to mdp */
+-	get_len(&req->src, &req->src_rect, src_bpp,
+-	&src0_len, &src1_len);
++	if (!(req->flags & MDP_BLIT_NON_CACHED)) {
++		/* flush src images to memory before dma to mdp */
++		get_len(&req->src, &req->src_rect, src_bpp,
++		&src0_len, &src1_len);
+ 
+-	flush_pmem_file(p_src_file,
+-	req->src.offset, src0_len);
+-
+-	if (IS_PSEUDOPLNR(req->src.format))
+ 		flush_pmem_file(p_src_file,
+-			req->src.offset + src0_len, src1_len);
++		req->src.offset, src0_len);
+ 
+-	get_len(&req->dst, &req->dst_rect, dst_bpp, &dst0_len, &dst1_len);
+-	flush_pmem_file(p_dst_file, req->dst.offset, dst0_len);
++		if (IS_PSEUDOPLNR(req->src.format))
++			flush_pmem_file(p_src_file,
++				req->src.offset + src0_len, src1_len);
++	}
+ 
+-	if (IS_PSEUDOPLNR(req->dst.format))
+-		flush_pmem_file(p_dst_file,
+-			req->dst.offset + dst0_len, dst1_len);
+ }
+ #else
+ static void flush_imgs(struct mdp_blit_req *req, int src_bpp, int dst_bpp,
+@@ -1432,11 +1428,7 @@ int mdp_ppp_blit(struct fb_info *info, struct mdp_blit_req *req)
+ 	down(&mdp_ppp_mutex);
+ 	/* MDP cmd block enable */
+ 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
+-	
+-	/* progressbar's glitch is observed when go to another site during landscape in browser.
+-	 * dojip.kim@lge.com 2010-08-17, QCT Case 00356710
+-	 */
+-//#ifdef CONFIG_FB_MSM_MDP31
++
+ #ifndef CONFIG_FB_MSM_MDP22
+ 	mdp_start_ppp(mfd, &iBuf, req, p_src_file, p_dst_file);
+ #else
+diff --git a/drivers/video/msm/msm_fb.c b/drivers/video/msm/msm_fb.c
+index 99627a1..a5b571c 100644
+--- a/drivers/video/msm/msm_fb.c
++++ b/drivers/video/msm/msm_fb.c
+@@ -40,10 +40,6 @@
+ #include <linux/android_pmem.h>
+ #include <linux/leds.h>
+ 
+-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
+-#include <mach/board_lge.h>
+-#endif
+-
+ #define MSM_FB_C
+ #include "msm_fb.h"
+ #include "mddihosti.h"
+@@ -51,6 +47,10 @@
+ #include "mdp.h"
+ #include "mdp4.h"
+ 
++#ifdef CONFIG_HAS_EARLYSUSPEND
++#undef CONFIG_HAS_EARLYSUSPEND
++#endif
++
+ #ifdef CONFIG_FB_MSM_LOGO
+ #define INIT_IMAGE_FILE "/logo.rle"
+ extern int load_565rle_image(char *filename);
+@@ -85,7 +85,6 @@
+ 
+ /* Setting mddi_msg_level to 8 prints out ALL messages */
+ u32 mddi_msg_level = 5;
+-int msm_fb_refesh_enabled = 1;	// LGE_CHANGE [bluerti@lge.com] 2009-07-18
+ 
+ extern int32 mdp_block_power_cnt[MDP_MAX_BLOCK];
+ extern unsigned long mdp_timer_duration;
+@@ -115,26 +114,24 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
+ static void msmfb_late_resume_late(struct early_suspend *h);
+ #endif
+ 
+-/* LGE_CHANGE_S
+- * Change codes to remove console cursor on booting screen. Refered to VS740
+- * 2010-07-31. minjong.gong@lge.com
+- */
++/* LGE_CHANGE_S, [munyoung@lge.com] booting logo */
+ #ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
++
+ static int is_console_inactive = 0;
+ 
+ static void msm_fb_set_console_inactive(int inactive)
+ {
+ 
+-       is_console_inactive = inactive;
++	is_console_inactive = inactive;
+ }
+ 
+ int msm_fb_get_console_inactive(void)
+ {
+-       return is_console_inactive;
++	return is_console_inactive;
+ }
+ EXPORT_SYMBOL(msm_fb_get_console_inactive);
+ #endif
+-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com  */
++/* LGE_CHANGE_E, [munyoung@lge.com] booting logo */
+ 
+ #ifdef MSM_FB_ENABLE_DBGFS
+ 
+@@ -230,13 +227,6 @@ int msm_fb_detect_client(const char *name)
+ 	return ret;
+ }
+ 
+-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
+-void *lge_get_fb_addr(void)
+-{
+-	return (fbram - (320 * 480 * 2 * 2));
+-}
+-#endif
+-
+ static int msm_fb_probe(struct platform_device *pdev)
+ {
+ 	struct msm_fb_data_type *mfd;
+@@ -576,7 +566,7 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
+ 	switch (blank_mode) {
+ 	case FB_BLANK_UNBLANK:
+ 		if (!mfd->panel_power_on) {
+-			mdelay(100);
++			msleep(16);
+ 			ret = pdata->on(mfd->pdev);
+ 			if (ret == 0) {
+ 				mfd->panel_power_on = TRUE;
+@@ -610,7 +600,7 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
+ 			curr_pwr_state = mfd->panel_power_on;
+ 			mfd->panel_power_on = FALSE;
+ 
+-			mdelay(100);
++			msleep(16);
+ 			ret = pdata->off(mfd->pdev);
+ 			if (ret)
+ 				mfd->panel_power_on = curr_pwr_state;
+@@ -992,14 +982,10 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
+ 	mfd->op_enable = TRUE;
+ 	mfd->panel_power_on = FALSE;
+ 
+-/* LGE_CHANGE_S
+- * Change codes to remove console cursor on booting screen. Refered to VS740
+- * 2010-07-31. minjong.gong@lge.com
+- */
+-#ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
++#ifdef CONFIG_FB_MSM_LOGO
++	/* LGE_CHANGE,[munyoung@lge.com] booting logo */
+ 	msm_fb_set_console_inactive(1);
+ #endif
+-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com */
+ 
+ 	/* cursor memory allocation */
+ 	if (mfd->cursor_update) {
+@@ -1202,15 +1188,12 @@ static int msm_fb_open(struct fb_info *info, int user)
+ 		}
+ 	}
+ 
+-/* LGE_CHANGE_S
+- * Change codes to remove console cursor on booting screen. Refered to VS740
+- * 2010-07-31. minjong.gong@lge.com
+- */
+-#ifdef CONFIG_LGE_FBCON_INACTIVE_CONSOLE
+-		if(mfd->ref_cnt > 1 && msm_fb_get_console_inactive())
+-				msm_fb_set_console_inactive(0);
++/* LGE_CHANGE_S, [munyoung@lge.com] booting logo */
++#ifdef CONFIG_FB_MSM_LOGO
++	if(mfd->ref_cnt > 1 && msm_fb_get_console_inactive())
++		msm_fb_set_console_inactive(0);
+ #endif
+-/* LGE_CHANGE_E, 2010-07-31. minjong.gong@lge.com */
++/* LGE_CHANGE_E, [munyoung@lge.com] booting logo */
+ 
+ 	mfd->ref_cnt++;
+ 	return 0;
+@@ -1511,355 +1494,172 @@ int msm_fb_resume_sw_refresher(struct msm_fb_data_type *mfd)
+ 
+ #if defined CONFIG_FB_MSM_MDP31
+ static int mdp_blit_split_height(struct fb_info *info,
+-				struct mdp_blit_req *req)
+-{
+-	int ret;
+-	struct mdp_blit_req splitreq;
+-	int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
+-	int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
+-
+-	splitreq = *req;
+-	/* break dest roi at height*/
+-	d_x_0 = d_x_1 = req->dst_rect.x;
+-	d_w_0 = d_w_1 = req->dst_rect.w;
+-	d_y_0 = req->dst_rect.y;
+-	if (req->dst_rect.h % 32 == 3)
+-		d_h_1 = (req->dst_rect.h - 3) / 2 - 1;
+-	else if (req->dst_rect.h % 32 == 2)
+-		d_h_1 = (req->dst_rect.h - 2) / 2 - 6;
+-	else
+-		d_h_1 = (req->dst_rect.h - 1) / 2 - 1;
+-	d_h_0 = req->dst_rect.h - d_h_1;
+-	d_y_1 = d_y_0 + d_h_0;
+-	if (req->dst_rect.h == 3) {
+-		d_h_1 = 2;
+-		d_h_0 = 2;
+-		d_y_1 = d_y_0 + 1;
+-	}
+-
+-	/* blit first region */
+-	if (((splitreq.flags & 0x07) == 0x04) ||
+-		((splitreq.flags & 0x07) == 0x0)) {
+-
+-		if (splitreq.flags & MDP_ROT_90) {
+-			s_y_0 = s_y_1 = req->src_rect.y;
+-			s_h_0 = s_h_1 = req->src_rect.h;
+-			s_x_0 = req->src_rect.x;
+-			s_w_1 = (req->src_rect.w * d_h_1) / req->dst_rect.h;
+-			s_w_0 = req->src_rect.w - s_w_1;
+-			s_x_1 = s_x_0 + s_w_0;
+-			if (d_h_1 >= 8 * s_w_1) {
+-				s_w_1++;
+-				s_x_1--;
+-			}
+-		} else {
+-			s_x_0 = s_x_1 = req->src_rect.x;
+-			s_w_0 = s_w_1 = req->src_rect.w;
+-			s_y_0 = req->src_rect.y;
+-			s_h_1 = (req->src_rect.h * d_h_1) / req->dst_rect.h;
+-			s_h_0 = req->src_rect.h - s_h_1;
+-			s_y_1 = s_y_0 + s_h_0;
+-			if (d_h_1 >= 8 * s_h_1) {
+-				s_h_1++;
+-				s_y_1--;
+-			}
+-		}
+-
+-		splitreq.src_rect.h = s_h_0;
+-		splitreq.src_rect.y = s_y_0;
+-		splitreq.dst_rect.h = d_h_0;
+-		splitreq.dst_rect.y = d_y_0;
+-		splitreq.src_rect.x = s_x_0;
+-		splitreq.src_rect.w = s_w_0;
+-		splitreq.dst_rect.x = d_x_0;
+-		splitreq.dst_rect.w = d_w_0;
+-	} else {
+-
+-		if (splitreq.flags & MDP_ROT_90) {
+-			s_y_0 = s_y_1 = req->src_rect.y;
+-			s_h_0 = s_h_1 = req->src_rect.h;
+-			s_x_0 = req->src_rect.x;
+-			s_w_1 = (req->src_rect.w * d_h_0) / req->dst_rect.h;
+-			s_w_0 = req->src_rect.w - s_w_1;
+-			s_x_1 = s_x_0 + s_w_0;
+-			if (d_h_0 >= 8 * s_w_1) {
+-				s_w_1++;
+-				s_x_1--;
+-			}
+-		} else {
+-			s_x_0 = s_x_1 = req->src_rect.x;
+-			s_w_0 = s_w_1 = req->src_rect.w;
+-			s_y_0 = req->src_rect.y;
+-			s_h_1 = (req->src_rect.h * d_h_0) / req->dst_rect.h;
+-			s_h_0 = req->src_rect.h - s_h_1;
+-			s_y_1 = s_y_0 + s_h_0;
+-			if (d_h_0 >= 8 * s_h_1) {
+-				s_h_1++;
+-				s_y_1--;
+-			}
+-		}
+-		splitreq.src_rect.h = s_h_0;
+-		splitreq.src_rect.y = s_y_0;
+-		splitreq.dst_rect.h = d_h_1;
+-		splitreq.dst_rect.y = d_y_1;
+-		splitreq.src_rect.x = s_x_0;
+-		splitreq.src_rect.w = s_w_0;
+-		splitreq.dst_rect.x = d_x_1;
+-		splitreq.dst_rect.w = d_w_1;
+-	}
+-	ret = mdp_ppp_blit(info, &splitreq);
+-	if (ret)
+-		return ret;
+-
+-	/* blit second region */
+-	if (((splitreq.flags & 0x07) == 0x04) ||
+-		((splitreq.flags & 0x07) == 0x0)) {
+-		splitreq.src_rect.h = s_h_1;
+-		splitreq.src_rect.y = s_y_1;
+-		splitreq.dst_rect.h = d_h_1;
+-		splitreq.dst_rect.y = d_y_1;
+-		splitreq.src_rect.x = s_x_1;
+-		splitreq.src_rect.w = s_w_1;
+-		splitreq.dst_rect.x = d_x_1;
+-		splitreq.dst_rect.w = d_w_1;
+-	} else {
+-		splitreq.src_rect.h = s_h_1;
+-		splitreq.src_rect.y = s_y_1;
+-		splitreq.dst_rect.h = d_h_0;
+-		splitreq.dst_rect.y = d_y_0;
+-		splitreq.src_rect.x = s_x_1;
+-		splitreq.src_rect.w = s_w_1;
+-		splitreq.dst_rect.x = d_x_0;
+-		splitreq.dst_rect.w = d_w_0;
+-	}
+-	ret = mdp_ppp_blit(info, &splitreq);
+-	return ret;
++                                struct mdp_blit_req *req)
++{                       
++        int ret;        
++        struct mdp_blit_req splitreq;
++        int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
++        int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
++                                
++        splitreq = *req;        
++        /* break dest roi at height*/
++        d_x_0 = d_x_1 = req->dst_rect.x;
++        d_w_0 = d_w_1 = req->dst_rect.w;
++        d_y_0 = req->dst_rect.y;
++        if (req->dst_rect.h % 32 == 3)
++                d_h_1 = (req->dst_rect.h - 3) / 2 - 1;
++        else if (req->dst_rect.h % 32 == 2)
++                d_h_1 = (req->dst_rect.h - 2) / 2 - 6;
++        else    
++                d_h_1 = (req->dst_rect.h - 1) / 2 - 1;
++        d_h_0 = req->dst_rect.h - d_h_1;
++        d_y_1 = d_y_0 + d_h_0;
++        if (req->dst_rect.h == 3) {
++                d_h_1 = 2;
++                d_h_0 = 2;
++                d_y_1 = d_y_0 + 1;
++        }
++                
++        /* blit first region */
++        if (((splitreq.flags & 0x07) == 0x04) ||
++                ((splitreq.flags & 0x07) == 0x0)) {
++                
++                if (splitreq.flags & MDP_ROT_90) {
++                        s_y_0 = s_y_1 = req->src_rect.y;
++                        s_h_0 = s_h_1 = req->src_rect.h;
++                        s_x_0 = req->src_rect.x;
++                        s_w_1 = (req->src_rect.w * d_h_1) / req->dst_rect.h;
++                        s_w_0 = req->src_rect.w - s_w_1;
++                        s_x_1 = s_x_0 + s_w_0;
++                        if (d_h_1 >= 8 * s_w_1) {
++                                s_w_1++;
++                                s_x_1--;
++                        }
++                } else {
++                        s_x_0 = s_x_1 = req->src_rect.x;
++                        s_w_0 = s_w_1 = req->src_rect.w;
++                        s_y_0 = req->src_rect.y;
++                        s_h_1 = (req->src_rect.h * d_h_1) / req->dst_rect.h;
++                        s_h_0 = req->src_rect.h - s_h_1;
++                        s_y_1 = s_y_0 + s_h_0;
++                        if (d_h_1 >= 8 * s_h_1) {
++                                s_h_1++;
++                                s_y_1--;
++                        }
++                }
++
++                splitreq.src_rect.h = s_h_0;
++                splitreq.src_rect.y = s_y_0;
++                splitreq.dst_rect.h = d_h_0;
++                splitreq.dst_rect.y = d_y_0;
++                splitreq.src_rect.x = s_x_0;
++                splitreq.src_rect.w = s_w_0;
++                splitreq.dst_rect.x = d_x_0;
++                splitreq.dst_rect.w = d_w_0;
++        } else {
++
++                if (splitreq.flags & MDP_ROT_90) {
++                        s_y_0 = s_y_1 = req->src_rect.y;
++                        s_h_0 = s_h_1 = req->src_rect.h;
++                        s_x_0 = req->src_rect.x;
++                        s_w_1 = (req->src_rect.w * d_h_0) / req->dst_rect.h;
++                        s_w_0 = req->src_rect.w - s_w_1;
++                        s_x_1 = s_x_0 + s_w_0;
++                        if (d_h_0 >= 8 * s_w_1) {
++                                s_w_1++;
++                                s_x_1--;
++                        }
++                } else {
++                        s_x_0 = s_x_1 = req->src_rect.x;
++                        s_w_0 = s_w_1 = req->src_rect.w;
++                        s_y_0 = req->src_rect.y;
++                        s_h_1 = (req->src_rect.h * d_h_0) / req->dst_rect.h;
++                        s_h_0 = req->src_rect.h - s_h_1;
++                        s_y_1 = s_y_0 + s_h_0;
++                        if (d_h_0 >= 8 * s_h_1) {
++                                s_h_1++;
++                                s_y_1--;
++                        }
++                }
++                splitreq.src_rect.h = s_h_0;
++                splitreq.src_rect.y = s_y_0;
++                splitreq.dst_rect.h = d_h_1;
++                splitreq.dst_rect.y = d_y_1;
++                splitreq.src_rect.x = s_x_0;
++                splitreq.src_rect.w = s_w_0;
++                splitreq.dst_rect.x = d_x_1;
++                splitreq.dst_rect.w = d_w_1;
++        }
++        ret = mdp_ppp_blit(info, &splitreq);
++        if (ret)
++                return ret;
++
++        /* blit second region */
++        if (((splitreq.flags & 0x07) == 0x04) ||
++                ((splitreq.flags & 0x07) == 0x0)) {
++                splitreq.src_rect.h = s_h_1;
++                splitreq.src_rect.y = s_y_1;
++                splitreq.dst_rect.h = d_h_1;
++                splitreq.dst_rect.y = d_y_1;
++                splitreq.src_rect.x = s_x_1;
++                splitreq.src_rect.w = s_w_1;
++                splitreq.dst_rect.x = d_x_1;
++                splitreq.dst_rect.w = d_w_1;
++        } else {
++                splitreq.src_rect.h = s_h_1;
++                splitreq.src_rect.y = s_y_1;
++                splitreq.dst_rect.h = d_h_0;
++                splitreq.dst_rect.y = d_y_0;
++                splitreq.src_rect.x = s_x_1;
++                splitreq.src_rect.w = s_w_1;
++                splitreq.dst_rect.x = d_x_0;
++                splitreq.dst_rect.w = d_w_0;
++        }
++        ret = mdp_ppp_blit(info, &splitreq);
++        return ret;
+ }
+ #endif
+ 
+-/* following is qct's comment
+- * this is temporal patch
+- * this patch will be included in qualcomm's next release.
+- * next release may be CS in Aug.
+- * so, we patch this code for pre-release test
+- * 2010-07-29, cleaneye.kim@lge.com
+- */
++//
+ // gciambel: 	cleaned this up to be MDP3.02 clean
+ //		The tile processing is different and thus we a different check.
+ //		Also, 7x27 does NOT have MN scaling and overhang issues in the height so no height splits are required
+ //              I removed all of these from the code and ONLY split in the width
+ //
+-#ifdef CONFIG_MACH_LGE
+-int mdp_blit(struct fb_info *info, struct mdp_blit_req *req) {
+-	int ret;
+-#if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
+-	unsigned int remainder = 0, is_bpp_4 = 0;
+-	struct mdp_blit_req splitreq;
+-	int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
+-	int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
+-
+-	if (req->flags & MDP_ROT_90) {
+-		if (((req->dst_rect.h == 1) && ((req->src_rect.w != 1) ||
+-				(req->dst_rect.w != req->src_rect.h))) ||
+-				((req->dst_rect.w == 1) && ((req->src_rect.h != 1) ||
+-					(req->dst_rect.h != req->src_rect.w)))) {
+-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
+-			return -EINVAL;
+-		}
+-	} else {
+-		if (((req->dst_rect.w == 1) && ((req->src_rect.w != 1) ||
+-						(req->dst_rect.h != req->src_rect.h))) ||
+-				((req->dst_rect.h == 1) && ((req->src_rect.h != 1) ||
+-					(req->dst_rect.w != req->src_rect.w)))) {
+-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
+-			return -EINVAL;
+-		}
+-	}
+-#endif
+-	if (unlikely(req->src_rect.h == 0 || req->src_rect.w == 0)) {
+-		printk(KERN_ERR "mpd_ppp: src img of zero size!\n");
+-		return -EINVAL;
+-	}
+-	if (unlikely(req->dst_rect.h == 0 || req->dst_rect.w == 0))
+-		return 0;
+-
+-#if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
+-	/* MDP width split workaround */
+-	remainder = (req->dst_rect.w)%16;
+-	is_bpp_4 = (mdp_get_bytes_per_pixel(req->dst.format) == 4) ? 1 : 0;
+-
+-	if ((is_bpp_4 && (remainder == 6 || remainder == 14)) ) {
+-
+-		/* make new request as provide by user */
+-		splitreq = *req;
+-
+-		/* break dest roi at width*/
+-		d_y_0 = d_y_1 = req->dst_rect.y;
+-		d_h_0 = d_h_1 = req->dst_rect.h;
+-		d_x_0 = req->dst_rect.x;
+-
+-		if (remainder == 14)
+-			d_w_1 = (req->dst_rect.w - 14) / 2 + 4;
+-		else if (remainder == 6)
+-			d_w_1 = req->dst_rect.w / 2 - 1;
+-		else
+-			d_w_1 = (req->dst_rect.w - 1) / 2 - 1;
+-
+-		d_w_0 = req->dst_rect.w - d_w_1;
+-		d_x_1 = d_x_0 + d_w_0;
+ 
+-		/* blit first region */
+-		if (((splitreq.flags & 0x07) == 0x07) ||
+-				((splitreq.flags & 0x07) == 0x0)) {
+-
+-			if (splitreq.flags & MDP_ROT_90) {
+-				s_x_0 = s_x_1 = req->src_rect.x;
+-				s_w_0 = s_w_1 = req->src_rect.w;
+-				s_y_0 = req->src_rect.y;
+-				s_h_1 = (req->src_rect.h * d_w_1) /
+-					req->dst_rect.w;
+-				s_h_0 = req->src_rect.h - s_h_1;
+-				s_y_1 = s_y_0 + s_h_0;
+-				if (d_w_1 >= 8 * s_h_1) {
+-					s_h_1++;
+-					s_y_1--;
+-				}
+-			} else {
+-				s_y_0 = s_y_1 = req->src_rect.y;
+-				s_h_0 = s_h_1 = req->src_rect.h;
+-				s_x_0 = req->src_rect.x;
+-				s_w_1 = (req->src_rect.w * d_w_1) /
+-					req->dst_rect.w;
+-				s_w_0 = req->src_rect.w - s_w_1;
+-				s_x_1 = s_x_0 + s_w_0;
+-				if (d_w_1 >= 8 * s_w_1) {
+-					s_w_1++;
+-					s_x_1--;
+-				}
+-			}
+-
+-			splitreq.src_rect.h = s_h_0;
+-			splitreq.src_rect.y = s_y_0;
+-			splitreq.dst_rect.h = d_h_0;
+-			splitreq.dst_rect.y = d_y_0;
+-			splitreq.src_rect.x = s_x_0;
+-			splitreq.src_rect.w = s_w_0;
+-			splitreq.dst_rect.x = d_x_0;
+-			splitreq.dst_rect.w = d_w_0;
+-		} else {
+-			if (splitreq.flags & MDP_ROT_90) {
+-				s_x_0 = s_x_1 = req->src_rect.x;
+-				s_w_0 = s_w_1 = req->src_rect.w;
+-				s_y_0 = req->src_rect.y;
+-				s_h_1 = (req->src_rect.h * d_w_0) /
+-					req->dst_rect.w;
+-				s_h_0 = req->src_rect.h - s_h_1;
+-				s_y_1 = s_y_0 + s_h_0;
+-				if (d_w_0 >= 8 * s_h_1) {
+-					s_h_1++;
+-					s_y_1--;
+-				}
+-			} else {
+-				s_y_0 = s_y_1 = req->src_rect.y;
+-				s_h_0 = s_h_1 = req->src_rect.h;
+-				s_x_0 = req->src_rect.x;
+-				s_w_1 = (req->src_rect.w * d_w_0) /
+-					req->dst_rect.w;
+-				s_w_0 = req->src_rect.w - s_w_1;
+-				s_x_1 = s_x_0 + s_w_0;
+-				if (d_w_0 >= 8 * s_w_1) {
+-					s_w_1++;
+-					s_x_1--;
+-				}
+-			}
+-			splitreq.src_rect.h = s_h_0;
+-			splitreq.src_rect.y = s_y_0;
+-			splitreq.dst_rect.h = d_h_1;
+-			splitreq.dst_rect.y = d_y_1;
+-			splitreq.src_rect.x = s_x_0;
+-			splitreq.src_rect.w = s_w_0;
+-			splitreq.dst_rect.x = d_x_1;
+-			splitreq.dst_rect.w = d_w_1;
+-		}
+-
+-		// No need to split in height
+-		ret = mdp_ppp_blit(info, &splitreq);
+-
+-		if (ret)
+-			return ret;
+-
+-		/* blit second region */
+-		if (((splitreq.flags & 0x07) == 0x07) ||
+-				((splitreq.flags & 0x07) == 0x0)) {
+-			splitreq.src_rect.h = s_h_1;
+-			splitreq.src_rect.y = s_y_1;
+-			splitreq.dst_rect.h = d_h_1;
+-			splitreq.dst_rect.y = d_y_1;
+-			splitreq.src_rect.x = s_x_1;
+-			splitreq.src_rect.w = s_w_1;
+-			splitreq.dst_rect.x = d_x_1;
+-			splitreq.dst_rect.w = d_w_1;
+-		} else {
+-			splitreq.src_rect.h = s_h_1;
+-			splitreq.src_rect.y = s_y_1;
+-			splitreq.dst_rect.h = d_h_0;
+-			splitreq.dst_rect.y = d_y_0;
+-			splitreq.src_rect.x = s_x_1;
+-			splitreq.src_rect.w = s_w_1;
+-			splitreq.dst_rect.x = d_x_0;
+-			splitreq.dst_rect.w = d_w_0;
+-		}
+-
+-		// No need to split in height ... just width
+-		ret = mdp_ppp_blit(info, &splitreq);
+-
+-		if (ret)
+-			return ret;
+-
+-	} 
+-	else
+-		ret = mdp_ppp_blit(info, req);
+-	return ret;
+-#else
+-	ret = mdp_ppp_blit(info, req);
+-	return ret;
+-#endif
+-}
+-
+-#else
+-int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
++int mdp_blit(struct fb_info *info, struct mdp_blit_req *req) 
+ {
+-	int ret;
++        int ret;
+ #if defined CONFIG_FB_MSM_MDP31 || defined CONFIG_FB_MSM_MDP30
+-	unsigned int remainder = 0, is_bpp_4 = 0;
+-	struct mdp_blit_req splitreq;
+-	int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
+-	int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
+-
+-	if (req->flags & MDP_ROT_90) {
+-		if (((req->dst_rect.h == 1) && ((req->src_rect.w != 1) ||
+-			(req->dst_rect.w != req->src_rect.h))) ||
+-			((req->dst_rect.w == 1) && ((req->src_rect.h != 1) ||
+-			(req->dst_rect.h != req->src_rect.w)))) {
+-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
+-			return -EINVAL;
+-		}
+-	} else {
+-		if (((req->dst_rect.w == 1) && ((req->src_rect.w != 1) ||
+-			(req->dst_rect.h != req->src_rect.h))) ||
+-			((req->dst_rect.h == 1) && ((req->src_rect.h != 1) ||
+-			(req->dst_rect.w != req->src_rect.w)))) {
+-			printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
+-			return -EINVAL;
+-		}
+-	}
++        unsigned int remainder = 0, is_bpp_4 = 0;
++        struct mdp_blit_req splitreq;
++        int s_x_0, s_x_1, s_w_0, s_w_1, s_y_0, s_y_1, s_h_0, s_h_1;
++        int d_x_0, d_x_1, d_w_0, d_w_1, d_y_0, d_y_1, d_h_0, d_h_1;
++
++        if (req->flags & MDP_ROT_90) {
++                if (((req->dst_rect.h == 1) && ((req->src_rect.w != 1) ||
++                        (req->dst_rect.w != req->src_rect.h))) ||
++                        ((req->dst_rect.w == 1) && ((req->src_rect.h != 1) ||
++                        (req->dst_rect.h != req->src_rect.w)))) {
++                        printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
++                        return -EINVAL;
++                }
++        } else {
++                if (((req->dst_rect.w == 1) && ((req->src_rect.w != 1) ||
++                        (req->dst_rect.h != req->src_rect.h))) ||
++                        ((req->dst_rect.h == 1) && ((req->src_rect.h != 1) ||
++                        (req->dst_rect.w != req->src_rect.w)))) {
++                        printk(KERN_ERR "mpd_ppp: error scaling when size is 1!\n");
++                        return -EINVAL;
++                }
++        }
+ #endif
+-	if (unlikely(req->src_rect.h == 0 || req->src_rect.w == 0)) {
+-		printk(KERN_ERR "mpd_ppp: src img of zero size!\n");
+-		return -EINVAL;
+-	}
+-	if (unlikely(req->dst_rect.h == 0 || req->dst_rect.w == 0))
+-		return 0;
++        if (unlikely(req->src_rect.h == 0 || req->src_rect.w == 0)) {
++                printk(KERN_ERR "mpd_ppp: src img of zero size!\n");
++                return -EINVAL;
++        }
++        if (unlikely(req->dst_rect.h == 0 || req->dst_rect.w == 0))
++                return 0;
+ 
+ #if defined CONFIG_FB_MSM_MDP31
+ 	/* MDP width split workaround */
+@@ -2165,11 +1965,10 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
+ 		ret = mdp_ppp_blit(info, req);
+ 	return ret;
+ #else
+-	ret = mdp_ppp_blit(info, req);
+-	return ret;
++        ret = mdp_ppp_blit(info, req);
++        return ret;
+ #endif
+ }
+-#endif
+ 
+ typedef void (*msm_dma_barrier_function_pointer) (void *, size_t);
+ 
+@@ -2970,4 +2769,13 @@ int __init msm_fb_init(void)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
++void *lge_get_fb_addr(void)
++{
++	return (fbram - (320 * 480 * 2 * 2));
++}
++#endif
++
++int msm_fb_refesh_enabled = 1;	// LGE_CHANGE [bluerti@lge.com] 2009-07-18
++
+ module_init(msm_fb_init);
+diff --git a/include/linux/msm_mdp.h b/include/linux/msm_mdp.h
+index 2b27d5e..ff32514 100644
+--- a/include/linux/msm_mdp.h
++++ b/include/linux/msm_mdp.h
+@@ -88,6 +88,9 @@ enum {
+ #define MDP_BLIT_WITH_DMA_BARRIERS	0x000
+ #define MDP_BLIT_WITH_NO_DMA_BARRIERS    \
+ 	(MDP_NO_DMA_BARRIER_START | MDP_NO_DMA_BARRIER_END)
++#define MDP_BLIT_SRC_GEM                0x04000000
++#define MDP_BLIT_DST_GEM                0x02000000
++#define MDP_BLIT_NON_CACHED		0x01000000
+ #define MDP_TRANSP_NOP 0xffffffff
+ #define MDP_ALPHA_NOP 0xff
+ 
+-- 
+1.7.5.4
+
+
+From 9c88363939b664f049c6e1de69ee9f96856ff710 Mon Sep 17 00:00:00 2001
+From: mik_os <kiril.mik.os@gmail.com>
+Date: Tue, 8 Mar 2011 10:26:12 +0200
+Subject: [PATCH 3/3] Update .config.
+
+---
+ .config |   10 +++++-----
+ 1 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/.config b/.config
+index 260bd45..c6d6e5f 100644
+--- a/.config
++++ b/.config
+@@ -1,7 +1,7 @@
+ #
+ # Automatically generated make config: don't edit
+ # Linux kernel version: 2.6.32.9
+-# Wed Feb 16 23:03:03 2011
++# Mon Mar  7 23:56:47 2011
+ #
+ CONFIG_ARM=y
+ CONFIG_SYS_SUPPORTS_APM_EMULATION=y
+@@ -63,7 +63,7 @@ CONFIG_INITRAMFS_SOURCE=""
+ CONFIG_RD_GZIP=y
+ # CONFIG_RD_BZIP2 is not set
+ # CONFIG_RD_LZMA is not set
+-CONFIG_CC_OPTIMIZE_FOR_SIZE=y
++# CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
+ CONFIG_SYSCTL=y
+ CONFIG_ANON_INODES=y
+ CONFIG_PANIC_TIMEOUT=1
+@@ -430,9 +430,9 @@ CONFIG_CPU_FREQ_STAT_DETAILS=y
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE is not set
+-CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y
++# CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND is not set
+ # CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVE is not set
+-# CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE is not set
++CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=y
+ CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+ CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+ CONFIG_CPU_FREQ_GOV_USERSPACE=y
+@@ -988,7 +988,7 @@ CONFIG_WLAN=y
+ # CONFIG_WLAN_PRE80211 is not set
+ CONFIG_WLAN_80211=y
+ # CONFIG_LIBERTAS is not set
+-CONFIG_LIBRA_SDIOIF=m
++# CONFIG_LIBRA_SDIOIF is not set
+ # CONFIG_HOSTAP is not set
+ CONFIG_BCM4325=m
+ # CONFIG_BCM4325_DEBUG is not set
+-- 
+1.7.5.4
+

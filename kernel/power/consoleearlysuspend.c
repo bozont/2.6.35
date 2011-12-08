@@ -52,7 +52,7 @@ static void console_late_resume(struct early_suspend *h)
 		return;
 	}
 
-	if (vt_waitactive(orig_fgconsole + 1))
+	if (vt_waitactive(orig_fgconsole))
 		pr_warning("console_late_resume: Can't switch VCs.\n");
 }
 
@@ -75,4 +75,5 @@ static void  __exit console_early_suspend_exit(void)
 
 module_init(console_early_suspend_init);
 module_exit(console_early_suspend_exit);
+
 

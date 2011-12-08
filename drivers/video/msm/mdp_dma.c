@@ -34,14 +34,13 @@
 
 #include <linux/fb.h>
 
-#include "mdp.h"
-#include "msm_fb.h"
-#include "mddihost.h"
-
 #ifdef CONFIG_MACH_LGE
 #include <mach/board_lge.h>
 #endif
 
+#include "mdp.h"
+#include "msm_fb.h"
+#include "mddihost.h"
 
 static uint32 mdp_last_dma2_update_width;
 static uint32 mdp_last_dma2_update_height;
@@ -60,8 +59,64 @@ extern u32 msm_fb_debug_enabled;
 extern struct workqueue_struct *mdp_dma_wq;
 
 int vsync_start_y_adjust = 4;
-
 extern int LG_ErrorHandler_enable ;	/*LGE_CHANGE [bluerti@lge.com] */
+
+/* LGE_CHANGE
+  * Change to apply workaround code according to the board revision info.
+  * 2010-06-10, minjong.gong@lge.com
+  */
+#ifdef CONFIG_FB_MSM_MDDI_HITACHI_HVGA
+#include <mach/board_lge.h>
+
+struct display_table {
+    unsigned reg;
+    unsigned char count;
+    unsigned char val_list[20];
+};
+
+#define REGFLAG_END_OF_TABLE      0xFFFF   // END OF REGISTERS MARKER
+
+static struct display_table mddi_hitachi_2c[] = {
+	{0x2c, 4, {0x00, 0x00, 0x00, 0x00}},
+	{REGFLAG_END_OF_TABLE, 0x00, {}}
+};
+static struct display_table mddi_hitachi_position_table[] = {
+	// set column address 
+	{0x2a,  4, {0x00, 0x00, 0x01, 0x3f}},
+	// set page address 
+	{0x2b,  4, {0x00, 0x00, 0x01, 0xdf}},
+	{REGFLAG_END_OF_TABLE, 0x00, {}}
+};
+extern void display_table(struct display_table *table, unsigned int count);
+#endif
+
+/* LGE_CHANGE [dojip.kim@lge.com] 2010-05-20,
+ * add code to prevent LCD shift
+ */
+#ifdef CONFIG_FB_MSM_MDDI_NOVATEK_HVGA
+#define REGFLAG_END_OF_TABLE      0xFFFF   // END OF REGISTERS MARKER
+
+	struct display_table {
+	    unsigned reg;
+	    unsigned char count;
+	    unsigned val_list[256];
+	};
+
+	struct display_table mddi_novatek_position_table[] = {
+		// set horizontal address 
+		{0x2a00, 1, {0x0000}}, // XSA
+		{0x2a01, 1, {0x0000}}, // XSA
+		{0x2a02, 1, {0x0000}}, // XEA
+		{0x2a03, 1, {0x013f}}, // XEA, 320-1
+		// set vertical address 
+		{0x2b00, 1, {0x0000}}, // YSA
+		{0x2b01, 1, {0x0000}}, // YSA
+		{0x2b02, 1, {0x0000}}, // YEA
+		{0x2b03, 1, {0x01df}}, // YEA, 480-1
+		{REGFLAG_END_OF_TABLE, 0x00, {}}
+	};
+extern void display_table(struct display_table *table, unsigned int count);
+#endif
 
 static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
 {
@@ -154,7 +209,9 @@ static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
 		}
 	}
 
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
+	dma2_cfg_reg |= DMA_DITHER_EN;
+
+#if CONFIG_LGE_HIDDEN_RESET_PATCH
 	if (on_hidden_reset) {
 		src = (uint8 *) lge_get_fb_copy_phys_addr();
 	} else {
@@ -170,6 +227,40 @@ static void mdp_dma2_update_lcd(struct msm_fb_data_type *mfd)
 
 	mdp_curr_dma2_update_width = iBuf->dma_w;
 	mdp_curr_dma2_update_height = iBuf->dma_h;
+
+#if defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERG)
+	if (lge_bd_rev <= LGE_REV_E) {
+		/* Use workaround code for 1st cut LCD.
+		 * 2010-04-22, minjong.gong@lge.com
+		 */
+		display_table(mddi_hitachi_2c,
+				sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+	}
+	/* Add code to prevent LCD shift.
+	 * 2010-05-18, minjong.gong@lge.com
+	 */
+	display_table(mddi_hitachi_position_table,
+			sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERC)
+	if (lge_bd_rev <= LGE_REV_D){
+		/* Use workaround code for 1st cut LCD.
+		 * 2010-04-22, minjong.gong@lge.com
+		 */
+		display_table(mddi_hitachi_2c, sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+	}
+	/* Add code to prevent LCD shift.
+	 * 2010-05-18, minjong.gong@lge.com
+	 */
+	display_table(mddi_hitachi_position_table, sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+#elif defined(CONFIG_FB_MSM_MDDI_HITACHI_HVGA) && defined(CONFIG_MACH_MSM7X27_THUNDERA)
+	display_table(mddi_hitachi_2c,
+			sizeof(mddi_hitachi_2c) / sizeof(struct display_table));
+#endif
+
+#ifdef CONFIG_FB_MSM_MDDI_NOVATEK_HVGA
+	display_table(mddi_novatek_position_table, 
+		sizeof(mddi_novatek_position_table) / sizeof(struct display_table));
+#endif
 
 	/* MDP cmd block enable */
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);

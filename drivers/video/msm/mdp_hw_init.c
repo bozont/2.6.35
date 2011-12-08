@@ -662,15 +662,10 @@ static u32 thunder_lut_camera[256] = {
 	0x00FAFFF6, 0x00FBFFF7, 0x00FDFFF8, 0x00FEFFF8, 0x00FFFFF9, 0x00FFFFFA, 0x00FFFFFB, 0x00FFFFFC
 };
 
-/* LGE_CHANGE_S
-  * Change code to prevent changing LUT if mdp clock if off. 
-  * 2010-12-23. minjong.gong@lge.com   
-  */
-extern boolean mdp_current_clk_on;
 void mdp_load_thunder_lut(int lut_type)
 {
 	int i=0;
-	if((lut_type != 0) && (mdp_current_clk_on == TRUE))
+	if(lut_type != 0)
 	{
 		/* MDP cmd block enable */
 		mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);

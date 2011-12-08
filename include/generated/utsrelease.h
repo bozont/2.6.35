@@ -1,1 +1,1 @@
-#define UTS_RELEASE "2.6.35.10-optimus+"
+#define UTS_RELEASE "2.6.35.10_GT540-AOSP_GINGERBREAD+"
